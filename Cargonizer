@@ -45,11 +45,14 @@ class LP_Cargonizer_Connector {
 
 	public function sanitize_settings($input) {
 		$current = $this->get_settings();
+		$available_methods = isset($input['available_methods']) && is_array($input['available_methods'])
+			? $input['available_methods']
+			: (isset($current['available_methods']) && is_array($current['available_methods']) ? $current['available_methods'] : array());
 
 		$output = array(
 			'api_key'   => isset($input['api_key']) ? sanitize_text_field($input['api_key']) : '',
 			'sender_id' => isset($input['sender_id']) ? sanitize_text_field($input['sender_id']) : '',
-			'available_methods' => isset($current['available_methods']) && is_array($current['available_methods']) ? $current['available_methods'] : array(),
+			'available_methods' => array(),
 			'enabled_methods' => array(),
 		);
 
@@ -61,10 +64,34 @@ class LP_Cargonizer_Connector {
 			$output['sender_id'] = $current['sender_id'];
 		}
 
+		$available_map = array();
+		foreach ($available_methods as $method) {
+			if (!is_array($method)) {
+				continue;
+			}
+
+			$method_key = isset($method['key']) ? sanitize_text_field((string) $method['key']) : '';
+			if ($method_key === '') {
+				continue;
+			}
+
+			$clean_method = array(
+				'key' => $method_key,
+				'agreement_id' => isset($method['agreement_id']) ? sanitize_text_field((string) $method['agreement_id']) : '',
+				'agreement_name' => isset($method['agreement_name']) ? sanitize_text_field((string) $method['agreement_name']) : '',
+				'product_id' => isset($method['product_id']) ? sanitize_text_field((string) $method['product_id']) : '',
+				'product_name' => isset($method['product_name']) ? sanitize_text_field((string) $method['product_name']) : '',
+				'label' => isset($method['label']) ? sanitize_text_field((string) $method['label']) : '',
+			);
+
+			$output['available_methods'][] = $clean_method;
+			$available_map[$method_key] = true;
+		}
+
 		if (isset($input['enabled_methods']) && is_array($input['enabled_methods'])) {
 			foreach ($input['enabled_methods'] as $method_key) {
 				$clean_key = sanitize_text_field($method_key);
-				if ($clean_key !== '') {
+				if ($clean_key !== '' && isset($available_map[$clean_key])) {
 					$output['enabled_methods'][] = $clean_key;
 				}
 			}
@@ -620,7 +647,8 @@ class LP_Cargonizer_Connector {
 					.then(function(res){ return res.json(); })
 					.then(function(res){
 						if (!res || !res.success || !res.data) {
-							shippingOptionsList.innerHTML = '<span style="color:#b32d2e;">Kunne ikke hente fraktvalg.</span>';
+							var message = (res && res.data && res.data.message) ? res.data.message : 'Kunne ikke hente fraktvalg.';
+							shippingOptionsList.innerHTML = '<span style="color:#b32d2e;">' + esc(message) + '</span>';
 							return;
 						}
 						renderShippingOptions(res.data.options || []);
@@ -872,17 +900,10 @@ class LP_Cargonizer_Connector {
 		$settings = $this->get_settings();
 		$options = isset($settings['available_methods']) && is_array($settings['available_methods']) ? $settings['available_methods'] : array();
 
-		// Fallback for eldre lagrede innstillinger som ikke har lastet metodekatalog enda.
-		if (empty($options)) {
-			$result = $this->fetch_transport_agreements();
-			if (!$result['success']) {
-				wp_send_json_error(array('message' => $result['message']), 400);
-			}
-
-			$options = $this->flatten_shipping_methods($result['data']);
-		}
-
 		$allowed_options = $this->filter_options_by_enabled_methods($options);
+		if (empty($allowed_options)) {
+			wp_send_json_error(array('message' => 'Ingen fraktmetoder er aktivert. Gå til WooCommerce → Cargonizer og aktiver minst én fraktmetode.'), 400);
+		}
 
 		wp_send_json_success(array('options' => $allowed_options));
 	}
@@ -923,8 +944,6 @@ class LP_Cargonizer_Connector {
 			$item = $items->addChild('item');
 			$item->addAttribute('type', 'package');
 			$item->addAttribute('amount', '1');
-			$item->addAttribute('weight', (string) max(0, $weight));
-			$item->addAttribute('volume', (string) max(0, $volume_dm3));
 			$item->addChild('description', esc_html($description));
 			$item->addChild('weight', (string) max(0, $weight));
 			$item->addChild('volume', (string) max(0, $volume_dm3));
@@ -1168,7 +1187,10 @@ class LP_Cargonizer_Connector {
 		if (
 			isset($_POST['lp_cargonizer_refresh_method_choices'])
 			&& isset($_POST['_wpnonce'])
-			&& wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['_wpnonce'])), self::NONCE_ACTION_FETCH)
+			&& (
+				wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['_wpnonce'])), self::NONCE_ACTION_SAVE)
+				|| wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['_wpnonce'])), self::NONCE_ACTION_FETCH)
+			)
 		) {
 			$method_refresh = $this->fetch_transport_agreements();
 			if ($method_refresh['success']) {
@@ -1279,7 +1301,7 @@ class LP_Cargonizer_Connector {
 
 					<p>
 						<button type="submit" name="lp_cargonizer_save_settings" class="button button-primary">
-							Lagre autentisering
+							Lagre innstillinger og metodevalg
 						</button>
 					</p>
 				</form>
