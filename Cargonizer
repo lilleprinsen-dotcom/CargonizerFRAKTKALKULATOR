@@ -1337,7 +1337,19 @@ class LP_Cargonizer_Connector {
 					return;
 				}
 				latestEstimateResults = results.slice();
-				var rows = results.map(function(row){
+
+				var okResults = [];
+				var failedResults = [];
+				results.forEach(function(row){
+					var status = (row && row.status) ? String(row.status).toLowerCase() : '';
+					if (status === 'ok') {
+						okResults.push(row);
+					} else {
+						failedResults.push(row);
+					}
+				});
+
+				function renderOkRow(row){
 					var agreementText = row.agreement_description || row.agreement_name || row.agreement_id || '—';
 					if (row.agreement_number) {
 						agreementText += ' (' + row.agreement_number + ')';
@@ -1378,9 +1390,44 @@ class LP_Cargonizer_Connector {
 						'<td>'+esc(statusText)+'</td>' +
 						'<td>'+renderServicepartnerControls(row)+'</td>' +
 					'</tr>';
-				}).join('');
-				resultsContent.innerHTML = '<table class="widefat striped"><thead><tr><th>Fraktmetode / produkt</th><th>Transportør / provider</th><th>ID</th><th>Prisfelt brukt</th><th>Grunnpris</th><th>Rabatt %</th><th>Rabattert grunnpris</th><th>Drivstofftillegg</th><th>Bomtillegg</th><th>Håndteringsgebyr</th><th>Subtotal eks. mva</th><th>Pris inkl. mva</th><th>Avrundet pris</th><th>Sluttpris eks. mva</th><th>Status</th><th>Melding</th></tr></thead><tbody>'+rows+'</tbody></table>';
+				}
+
+				function renderFailedRow(row){
+					var debugFields = [];
+					if (row.error_code) { debugFields.push('Kode: ' + row.error_code); }
+					if (row.error_type) { debugFields.push('Type: ' + row.error_type); }
+					if (row.error_details) { debugFields.push('Detaljer: ' + row.error_details); }
+					if (row.http_status) { debugFields.push('HTTP: ' + row.http_status); }
+					if (row.human_error) { debugFields.push('Forklaring: ' + row.human_error); }
+					if (row.parsed_error_message && row.parsed_error_message !== row.error) { debugFields.push('Parsed: ' + row.parsed_error_message); }
+					var debugText = debugFields.length ? debugFields.join(' | ') : '—';
+					return '<tr>' +
+						'<td>'+esc(row.method_name || row.product_id || 'Ukjent metode')+'</td>' +
+						'<td>'+esc((row.carrier_name || '—') + (row.carrier_id ? ' (' + row.carrier_id + ')' : ''))+'</td>' +
+						'<td>'+esc(row.status || 'failed')+'</td>' +
+						'<td>'+esc(row.error || row.parsed_error_message || 'Ukjent feil')+'</td>' +
+						'<td>'+esc(debugText)+'</td>' +
+					'</tr>';
+				}
+
+				var okRows = okResults.map(renderOkRow).join('');
+				var okTableHtml = '<table class="widefat striped"><thead><tr><th>Fraktmetode / produkt</th><th>Transportør / provider</th><th>ID</th><th>Prisfelt brukt</th><th>Grunnpris</th><th>Rabatt %</th><th>Rabattert grunnpris</th><th>Drivstofftillegg</th><th>Bomtillegg</th><th>Håndteringsgebyr</th><th>Subtotal eks. mva</th><th>Pris inkl. mva</th><th>Avrundet pris</th><th>Sluttpris eks. mva</th><th>Status</th><th>Melding</th></tr></thead><tbody>' +
+					(okRows || '<tr><td colspan="16"><em>Ingen vellykkede metoder.</em></td></tr>') +
+					'</tbody></table>';
+
+				var failedSectionHtml = '';
+				if (failedResults.length) {
+					var failedRows = failedResults.map(renderFailedRow).join('');
+					failedSectionHtml = '<details style="margin-top:12px;"><summary>Vis metoder som feilet (' + failedResults.length + ')</summary>' +
+						'<div style="margin-top:8px;">' +
+						'<table class="widefat striped"><thead><tr><th>Fraktmetode</th><th>Transportør</th><th>Status</th><th>Feilmelding</th><th>Debug/details</th></tr></thead><tbody>' + failedRows + '</tbody></table>' +
+						'</div>' +
+					'</details>';
+				}
+
+				resultsContent.innerHTML = okTableHtml + failedSectionHtml;
 			}
+
 
 			function fetchShippingOptions(){
 				shippingOptionsList.innerHTML = '<em>Laster fraktvalg...</em>';
