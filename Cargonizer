@@ -54,6 +54,7 @@ class LP_Cargonizer_Connector {
 			'sender_id' => isset($input['sender_id']) ? sanitize_text_field($input['sender_id']) : '',
 			'available_methods' => array(),
 			'enabled_methods' => array(),
+			'method_discounts' => array(),
 		);
 
 		// Behold eksisterende verdi hvis felt sendes tomt ved et uhell.
@@ -103,7 +104,39 @@ class LP_Cargonizer_Connector {
 
 		$output['enabled_methods'] = array_values(array_unique($output['enabled_methods']));
 
+		if (isset($input['method_discounts']) && is_array($input['method_discounts'])) {
+			$enabled_map = array_fill_keys($output['enabled_methods'], true);
+			foreach ($input['method_discounts'] as $method_key => $discount_value) {
+				$clean_key = sanitize_text_field((string) $method_key);
+				if ($clean_key === '' || !isset($available_map[$clean_key]) || !isset($enabled_map[$clean_key])) {
+					continue;
+				}
+
+				$output['method_discounts'][$clean_key] = $this->sanitize_discount_percent($discount_value);
+			}
+		}
+
 		return $output;
+	}
+
+	private function sanitize_discount_percent($value) {
+		if (is_string($value)) {
+			$value = str_replace(',', '.', $value);
+		}
+
+		if (!is_numeric($value)) {
+			return 0;
+		}
+
+		$discount = (float) $value;
+		if ($discount < 0) {
+			$discount = 0;
+		}
+		if ($discount > 100) {
+			$discount = 100;
+		}
+
+		return round($discount, 2);
 	}
 
 	private function get_settings() {
@@ -112,6 +145,7 @@ class LP_Cargonizer_Connector {
 			'sender_id' => '',
 			'available_methods' => array(),
 			'enabled_methods' => array(),
+			'method_discounts' => array(),
 		);
 
 		$saved = get_option(self::OPTION_KEY, array());
@@ -293,6 +327,53 @@ class LP_Cargonizer_Connector {
 		}
 
 		return $filtered;
+	}
+
+	private function get_enabled_method_discounts() {
+		$settings = $this->get_settings();
+		$enabled_map = $this->get_enabled_method_map();
+		$discounts = isset($settings['method_discounts']) && is_array($settings['method_discounts']) ? $settings['method_discounts'] : array();
+		$clean_discounts = array();
+
+		foreach ($discounts as $method_key => $discount_value) {
+			$clean_key = sanitize_text_field((string) $method_key);
+			if ($clean_key === '' || !isset($enabled_map[$clean_key])) {
+				continue;
+			}
+
+			$clean_discounts[$clean_key] = $this->sanitize_discount_percent($discount_value);
+		}
+
+		return $clean_discounts;
+	}
+
+	private function parse_price_to_number($price_value) {
+		$raw = trim((string) $price_value);
+		if ($raw === '') {
+			return null;
+		}
+
+		$clean = preg_replace('/[^\d,\.\-]/u', '', $raw);
+		if ($clean === '' || $clean === '-' || $clean === '.' || $clean === ',') {
+			return null;
+		}
+
+		$last_dot = strrpos($clean, '.');
+		$last_comma = strrpos($clean, ',');
+		if ($last_dot !== false && $last_comma !== false) {
+			$decimal_separator = $last_dot > $last_comma ? '.' : ',';
+			$thousand_separator = $decimal_separator === '.' ? ',' : '.';
+			$clean = str_replace($thousand_separator, '', $clean);
+			$clean = str_replace($decimal_separator, '.', $clean);
+		} elseif ($last_comma !== false) {
+			$clean = str_replace(',', '.', $clean);
+		}
+
+		if (!is_numeric($clean)) {
+			return null;
+		}
+
+		return (float) $clean;
 	}
 
 	private function parse_transport_agreements($xml) {
@@ -695,12 +776,14 @@ class LP_Cargonizer_Connector {
 						'<td>'+esc(row.method_name || 'Ukjent metode')+'</td>' +
 						'<td>'+esc((row.carrier_name || '—') + (row.carrier_id ? ' (' + row.carrier_id + ')' : ''))+'</td>' +
 						'<td>'+esc(agreementText + ' / ' + (row.agreement_id || '—') + (row.product_id ? ' / ' + row.product_id : ''))+'</td>' +
-						'<td>'+esc(row.estimated_price || '—')+'</td>' +
+						'<td>'+esc(row.original_price || row.estimated_price || '—')+'</td>' +
+						'<td>'+esc((row.discount_percent !== undefined ? row.discount_percent : 0) + '%')+'</td>' +
+						'<td>'+esc(row.discounted_price || '—')+'</td>' +
 						'<td>'+esc(row.status || 'unknown')+'</td>' +
 						'<td style="color:'+(row.error ? '#b32d2e' : '#2271b1')+';">'+esc(row.error || 'OK')+'</td>' +
 					'</tr>';
 				}).join('');
-				resultsContent.innerHTML = '<table class="widefat striped"><thead><tr><th>Fraktmetode / produkt</th><th>Transportør / provider</th><th>ID</th><th>Estimert pris</th><th>Status</th><th>Melding</th></tr></thead><tbody>'+rows+'</tbody></table>';
+				resultsContent.innerHTML = '<table class="widefat striped"><thead><tr><th>Fraktmetode / produkt</th><th>Transportør / provider</th><th>ID</th><th>Originalpris</th><th>Rabatt</th><th>Rabattert pris</th><th>Status</th><th>Melding</th></tr></thead><tbody>'+rows+'</tbody></table>';
 			}
 
 			function fetchShippingOptions(){
@@ -1139,6 +1222,7 @@ class LP_Cargonizer_Connector {
 
 		$results = array();
 		$has_allowed_methods = false;
+		$method_discounts = $this->get_enabled_method_discounts();
 		foreach ($methods as $method) {
 			$method_payload = array(
 				'agreement_id' => isset($method['agreement_id']) ? sanitize_text_field($method['agreement_id']) : '',
@@ -1167,6 +1251,8 @@ class LP_Cargonizer_Connector {
 				'body' => $xml,
 			));
 
+			$discount_percent = isset($method_discounts[$method_key]) ? $method_discounts[$method_key] : 0;
+
 			$item = array(
 				'method_name' => $this->format_method_label($method_payload['agreement_name'], $method_payload['product_name'], $method_payload['carrier_name']),
 				'agreement_id' => $method_payload['agreement_id'],
@@ -1177,6 +1263,9 @@ class LP_Cargonizer_Connector {
 				'carrier_name' => $method_payload['carrier_name'],
 				'product_id' => $method_payload['product_id'],
 				'estimated_price' => '',
+				'original_price' => '',
+				'discount_percent' => $discount_percent,
+				'discounted_price' => '',
 				'status' => 'failed',
 				'error' => '',
 				'raw_response' => '',
@@ -1203,9 +1292,19 @@ class LP_Cargonizer_Connector {
 			}
 
 			$item['estimated_price'] = $this->parse_estimated_price($body);
+			$item['original_price'] = $item['estimated_price'];
 			$item['status'] = $item['estimated_price'] !== '' ? 'ok' : 'unknown';
 			if ($item['status'] === 'unknown') {
 				$item['error'] = 'Fikk svar, men fant ikke estimert prisfelt i responsen.';
+			} else {
+				$parsed_original_price = $this->parse_price_to_number($item['estimated_price']);
+				if ($parsed_original_price === null) {
+					$item['status'] = 'price_parse_failed';
+					$item['error'] = 'Kunne ikke tolke estimert pris som et tall. Viser kun original respons.';
+				} else {
+					$discounted_price = $parsed_original_price - ($parsed_original_price * $discount_percent / 100);
+					$item['discounted_price'] = number_format($discounted_price, 2, '.', '');
+				}
 			}
 
 			$results[] = $item;
@@ -1238,6 +1337,7 @@ class LP_Cargonizer_Connector {
 				'sender_id' => isset($_POST['lp_cargonizer_sender_id']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_sender_id'])) : '',
 				'available_methods' => isset($settings['available_methods']) && is_array($settings['available_methods']) ? $settings['available_methods'] : array(),
 				'enabled_methods' => isset($_POST['lp_cargonizer_enabled_methods']) && is_array($_POST['lp_cargonizer_enabled_methods']) ? array_map('sanitize_text_field', wp_unslash($_POST['lp_cargonizer_enabled_methods'])) : array(),
+				'method_discounts' => isset($_POST['lp_cargonizer_method_discounts']) && is_array($_POST['lp_cargonizer_method_discounts']) ? wp_unslash($_POST['lp_cargonizer_method_discounts']) : array(),
 			);
 
 			$new_settings = $this->sanitize_settings($new_settings);
@@ -1348,15 +1448,20 @@ class LP_Cargonizer_Connector {
 
 
 					<h2>Tilgjengelige fraktmetoder i kalkulator</h2>
-					<p>Kun valgte metoder vises for admin ved estimering av fraktkostnad.</p>
+					<p>Kun valgte metoder vises for admin ved estimering av fraktkostnad. Rabatt er intern rabatt i % som trekkes fra transportørens estimerte pris i popup-resultatet.</p>
 
 					<?php if (!empty($settings['available_methods']) && is_array($settings['available_methods'])) : ?>
 						<div style="max-height:260px;overflow:auto;border:1px solid #dcdcde;padding:12px;background:#fff;">
 							<?php foreach ($settings['available_methods'] as $method) : ?>
-								<?php $method_key = isset($method['key']) ? (string) $method['key'] : ''; ?>
-								<label style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px solid #f0f0f1;">
-									<input type="checkbox" name="lp_cargonizer_enabled_methods[]" value="<?php echo esc_attr($method_key); ?>" <?php checked(in_array($method_key, $settings['enabled_methods'], true)); ?>>
-									<span>
+								<?php
+								$method_key = isset($method['key']) ? (string) $method['key'] : '';
+								$is_enabled = in_array($method_key, $settings['enabled_methods'], true);
+								$method_discounts = isset($settings['method_discounts']) && is_array($settings['method_discounts']) ? $settings['method_discounts'] : array();
+								$discount_value = isset($method_discounts[$method_key]) ? $this->sanitize_discount_percent($method_discounts[$method_key]) : 0;
+								?>
+								<div style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px solid #f0f0f1;">
+									<input class="lp-cargonizer-method-toggle" type="checkbox" name="lp_cargonizer_enabled_methods[]" value="<?php echo esc_attr($method_key); ?>" <?php checked($is_enabled); ?>>
+									<span style="flex:1;">
 										<strong><?php echo esc_html(isset($method['label']) ? $method['label'] : 'Ukjent metode'); ?></strong><br>
 										<small>
 											Transportør: <?php echo esc_html(isset($method['carrier_name']) && $method['carrier_name'] !== '' ? $method['carrier_name'] : '—'); ?><?php echo esc_html(isset($method['carrier_id']) && $method['carrier_id'] !== '' ? ' (' . $method['carrier_id'] . ')' : ''); ?> /
@@ -1366,12 +1471,34 @@ class LP_Cargonizer_Connector {
 											Produkt: <?php echo esc_html(isset($method['product_id']) ? $method['product_id'] : '—'); ?>
 										</small>
 									</span>
-								</label>
+									<label style="display:flex;flex-direction:column;gap:4px;min-width:145px;">
+										<span>Rabatt (%)</span>
+										<input class="small-text lp-cargonizer-method-discount" type="number" min="0" max="100" step="0.01" name="lp_cargonizer_method_discounts[<?php echo esc_attr($method_key); ?>]" value="<?php echo esc_attr($discount_value); ?>" <?php disabled(!$is_enabled); ?>>
+									</label>
+								</div>
 							<?php endforeach; ?>
 						</div>
 					<?php else : ?>
 						<p><em>Ingen fraktmetoder hentet ennå. Klikk "Oppdater liste over fraktmetoder" først.</em></p>
 					<?php endif; ?>
+					<script>
+					(function(){
+						var container = document.currentScript ? document.currentScript.previousElementSibling : null;
+						if (!container) { return; }
+						container.querySelectorAll('.lp-cargonizer-method-toggle').forEach(function(toggle){
+							var row = toggle.closest('div');
+							if (!row) { return; }
+							var discount = row.querySelector('.lp-cargonizer-method-discount');
+							if (!discount) { return; }
+							var sync = function(){
+								discount.disabled = !toggle.checked;
+								if (!toggle.checked) { discount.value = '0'; }
+							};
+							toggle.addEventListener('change', sync);
+							sync();
+						});
+					})();
+					</script>
 
 					<p>
 						<button type="submit" name="lp_cargonizer_refresh_method_choices" class="button button-secondary">
