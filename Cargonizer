@@ -1055,6 +1055,15 @@ class LP_Cargonizer_Connector {
 					'Detaljer: ' + (row.error_details || '—'),
 					'Prisfelt brukt: ' + source + ' = ' + selectedValue,
 					'Alternative prisfelt i respons: ' + (alternatives.length ? alternatives.join(', ') : 'ingen'),
+					'price_source_config: ' + (row.price_source_config || '—'),
+					'selected_price_source: ' + (row.selected_price_source || '—'),
+					'base_price: ' + (row.base_price || '—'),
+					'fixed_addition: ' + (row.fixed_addition || '—'),
+					'percentage_addition: ' + (row.percentage_addition || '—'),
+					'vat_percent: ' + (row.vat_percent || '—'),
+					'price_incl_vat: ' + (row.price_incl_vat || '—'),
+					'rounded_price: ' + (row.rounded_price || '—'),
+					'final_price_ex_vat: ' + (row.final_price_ex_vat || '—'),
 					'estimated_cost: ' + (row.estimated_cost || '—'),
 					'gross_amount: ' + (row.gross_amount || '—'),
 					'net_amount: ' + (row.net_amount || '—'),
@@ -1277,31 +1286,30 @@ class LP_Cargonizer_Connector {
 					var compactIdHtml = '<div><strong>Fraktavtale:</strong> '+esc(agreementText || '—')+'</div>' +
 						'<div><strong>Agreement ID:</strong> '+esc(row.agreement_id || '—')+'</div>' +
 						'<div><strong>Produkt:</strong> '+esc(row.product_id || '—')+'</div>';
-					var fuelText = row.fuel_amount !== '' && row.fuel_amount !== undefined
-					? row.fuel_amount + (row.fuel_type === 'percent' ? ' (prosent)' : ' (fast)')
-					: '—';
-				var tollText = row.toll_amount !== '' && row.toll_amount !== undefined
-					? row.toll_amount + (row.toll_type === 'percent' ? (' (prosent' + (row.toll_percent_max && Number(row.toll_percent_max) > 0 ? ', maks ' + row.toll_percent_max : '') + ')') : ' (fast)')
-					: '—';
-				var basisText = row.discount_basis !== '' && row.discount_basis !== undefined ? row.discount_basis : '—';
-				if (row.negative_base_clamped) {
-					basisText += ' (clampet til 0)';
-				}
-				return '<tr>' +
-					'<td>'+esc(row.method_name || 'Ukjent metode')+'</td>' +
-					'<td>'+esc((row.carrier_name || '—') + (row.carrier_id ? ' (' + row.carrier_id + ')' : ''))+'</td>' +
-					'<td>'+compactIdHtml+'</td>' +
-					'<td>'+esc(row.selected_price_value || row.original_price || row.estimated_price || '—')+'</td>' +
-					'<td>'+esc((row.discount_percent !== undefined ? row.discount_percent : 0) + '%')+'</td>' +
-					'<td>'+esc(fuelText)+'</td>' +
-					'<td>'+esc(tollText)+'</td>' +
-					'<td>'+esc(basisText)+'</td>' +
-					'<td>'+esc(row.discounted_price || '—')+'</td>' +
-					'<td>'+esc(row.status || 'unknown')+'</td>' +
-					'<td>'+renderServicepartnerControls(row)+'</td>' +
-				'</tr>';
-			}).join('');
-			resultsContent.innerHTML = '<table class="widefat striped"><thead><tr><th>Fraktmetode / produkt</th><th>Transportør / provider</th><th>ID</th><th>Originalpris</th><th>Rabatt%</th><th>Drivstofftillegg</th><th>Bomavgift</th><th>Rabattgrunnlag</th><th>Sluttpris</th><th>Status</th><th>Melding</th></tr></thead><tbody>'+rows+'</tbody></table>';
+					var basePriceText = row.base_price !== '' && row.base_price !== undefined ? row.base_price : (row.selected_price_value || row.original_price || row.estimated_price || '—');
+					var fixedAdditionText = row.fixed_addition !== '' && row.fixed_addition !== undefined ? row.fixed_addition : '—';
+					var percentageAdditionText = row.percentage_addition !== '' && row.percentage_addition !== undefined ? row.percentage_addition + '%' : '—';
+					var inclVatText = row.price_incl_vat !== '' && row.price_incl_vat !== undefined ? row.price_incl_vat : '—';
+					var roundedText = row.rounded_price !== '' && row.rounded_price !== undefined ? row.rounded_price : '—';
+					var finalExVatText = row.final_price_ex_vat !== '' && row.final_price_ex_vat !== undefined ? row.final_price_ex_vat : '—';
+					var statusText = row.status || 'unknown';
+					var priceFieldText = row.selected_price_source || row.price_source_config || '—';
+					return '<tr>' +
+						'<td>'+esc(row.method_name || 'Ukjent metode')+'</td>' +
+						'<td>'+esc((row.carrier_name || '—') + (row.carrier_id ? ' (' + row.carrier_id + ')' : ''))+'</td>' +
+						'<td>'+compactIdHtml+'</td>' +
+						'<td>'+esc(priceFieldText)+'</td>' +
+						'<td>'+esc(basePriceText)+'</td>' +
+						'<td>'+esc(fixedAdditionText)+'</td>' +
+						'<td>'+esc(percentageAdditionText)+'</td>' +
+						'<td>'+esc(inclVatText)+'</td>' +
+						'<td>'+esc(roundedText)+'</td>' +
+						'<td>'+esc(finalExVatText)+'</td>' +
+						'<td>'+esc(statusText)+'</td>' +
+						'<td>'+renderServicepartnerControls(row)+'</td>' +
+					'</tr>';
+				}).join('');
+				resultsContent.innerHTML = '<table class="widefat striped"><thead><tr><th>Fraktmetode / produkt</th><th>Transportør / provider</th><th>ID</th><th>Prisfelt brukt</th><th>Grunnpris</th><th>Fast tillegg</th><th>Prosentpåslag</th><th>Pris inkl. mva</th><th>Avrundet pris</th><th>Sluttpris eks. mva</th><th>Status</th><th>Melding</th></tr></thead><tbody>'+rows+'</tbody></table>';
 			}
 
 			function fetchShippingOptions(){
@@ -2560,7 +2568,7 @@ class LP_Cargonizer_Connector {
 
 
 					<h2>Tilgjengelige fraktmetoder i kalkulator</h2>
-					<p>Kun valgte metoder vises for admin ved estimering av fraktkostnad. Rabatt beregnes kun på fraktgrunnlag (originalpris minus drivstofftillegg og bomavgift), før tilleggene legges tilbake.</p>
+					<p>Kun valgte metoder vises for admin ved estimering av fraktkostnad. Ny prismodell beregner sluttpris basert på valgt prisfelt fra Cargonizer, fast tillegg, prosentpåslag, mva, valgt avrunding og sluttpris eks. mva.</p>
 
 					<?php if (!empty($settings['available_methods']) && is_array($settings['available_methods'])) : ?>
 						<div style="max-height:260px;overflow:auto;border:1px solid #dcdcde;padding:12px;background:#fff;">
@@ -2597,12 +2605,14 @@ class LP_Cargonizer_Connector {
 									</span>
 									<div style="display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:8px;align-items:end;min-width:620px;">
 										<label style="display:flex;flex-direction:column;gap:4px;">
-											<span>Rabatt (%)</span>
+											<span>Legacy rabatt (%)</span>
+											<small style="color:#646970;">Brukes kun for bakoverkompatibilitet når nye felter ikke er satt.</small>
 											<input class="small-text lp-cargonizer-method-input" type="number" min="0" max="100" step="0.01" name="lp_cargonizer_method_discounts[<?php echo esc_attr($method_key); ?>]" value="<?php echo esc_attr($discount_value); ?>" <?php disabled(!$is_enabled); ?>>
 											<input class="small-text lp-cargonizer-method-input" type="hidden" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][discount_percent]" value="<?php echo esc_attr($discount_value); ?>" <?php disabled(!$is_enabled); ?>>
 										</label>
 										<label style="display:flex;flex-direction:column;gap:4px;">
-											<span>Drivstofftillegg</span>
+											<span>Legacy drivstoff</span>
+											<small style="color:#646970;">Brukes kun for bakoverkompatibilitet når nye felter ikke er satt.</small>
 											<div style="display:flex;gap:4px;align-items:center;">
 												<input class="small-text lp-cargonizer-method-input" type="number" min="0" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][fuel_value]" value="<?php echo esc_attr($fuel_value); ?>" <?php disabled(!$is_enabled); ?>>
 												<select class="lp-cargonizer-method-input" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][fuel_type]" <?php disabled(!$is_enabled); ?>>
@@ -2612,7 +2622,8 @@ class LP_Cargonizer_Connector {
 											</div>
 										</label>
 										<label style="display:flex;flex-direction:column;gap:4px;">
-											<span>Bomavgift</span>
+											<span>Legacy bom</span>
+											<small style="color:#646970;">Brukes kun for bakoverkompatibilitet når nye felter ikke er satt.</small>
 											<div style="display:flex;gap:4px;align-items:center;">
 												<input class="small-text lp-cargonizer-method-input" type="number" min="0" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][toll_value]" value="<?php echo esc_attr($toll_value); ?>" <?php disabled(!$is_enabled); ?>>
 												<select class="lp-cargonizer-method-input lp-cargonizer-toll-type" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][toll_type]" <?php disabled(!$is_enabled); ?>>
@@ -2624,6 +2635,7 @@ class LP_Cargonizer_Connector {
 										</label>
 										<label style="display:flex;flex-direction:column;gap:4px;">
 											<span>Ny prismodell</span>
+											<small style="color:#646970;">Valgt prisfelt + fast tillegg + prosentpåslag + mva + avrunding =&gt; sluttpris eks. mva.</small>
 											<select class="lp-cargonizer-method-input" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][price_source]" <?php disabled(!$is_enabled); ?>>
 												<option value="estimated" <?php selected($price_source, 'estimated'); ?>>estimated</option>
 												<option value="net" <?php selected($price_source, 'net'); ?>>net</option>
@@ -2665,11 +2677,6 @@ class LP_Cargonizer_Connector {
 							};
 							var sync = function(){
 								pricingInputs.forEach(function(input){ input.disabled = !toggle.checked; });
-								if (!toggle.checked) {
-									pricingInputs.forEach(function(input){
-										if (input.type === 'number' || input.type === 'hidden') { input.value = '0'; }
-									});
-								}
 								if (visibleDiscount && hiddenDiscount) {
 									hiddenDiscount.value = visibleDiscount.value || '0';
 								}
