@@ -1066,7 +1066,7 @@ class LP_Cargonizer_Connector {
 					'fuel_surcharge: ' + (row.fuel_surcharge || '—'),
 					'toll_surcharge: ' + (row.toll_surcharge || '—'),
 					'handling_fee: ' + (row.handling_fee || '—'),
-					'subtotal_ex_vat: ' + (row.subtotal_ex_vat || row.adjusted_price || '—'),
+					'subtotal_ex_vat: ' + (row.subtotal_ex_vat || '—'),
 					'vat_percent: ' + (row.vat_percent || '—'),
 					'price_incl_vat: ' + (row.price_incl_vat || '—'),
 					'rounded_price: ' + (row.rounded_price || '—'),
@@ -2231,7 +2231,6 @@ class LP_Cargonizer_Connector {
 			'toll_surcharge' => '',
 			'handling_fee' => '',
 			'subtotal_ex_vat' => '',
-			'adjusted_price' => '',
 			'price_incl_vat' => '',
 			'rounded_price' => '',
 			'final_price_ex_vat' => '',
@@ -2273,7 +2272,6 @@ class LP_Cargonizer_Connector {
 		$result['toll_surcharge'] = number_format($toll_surcharge, 2, '.', '');
 		$result['handling_fee'] = number_format($handling_fee, 2, '.', '');
 		$result['subtotal_ex_vat'] = number_format($subtotal_ex_vat, 2, '.', '');
-		$result['adjusted_price'] = $result['subtotal_ex_vat'];
 		$result['price_incl_vat'] = number_format($price_incl_vat, 2, '.', '');
 		$result['rounded_price'] = number_format($rounded_price, 2, '.', '');
 		$result['final_price_ex_vat'] = number_format($final_price_ex_vat, 2, '.', '');
@@ -2419,19 +2417,12 @@ class LP_Cargonizer_Connector {
 				'fallback_step_used' => 0,
 				'original_price' => '',
 				'discount_percent' => $discount_percent,
-				'fuel_amount' => '',
-				'toll_amount' => '',
-				'discount_basis' => '',
 				'discounted_base' => '',
-				'negative_base_clamped' => false,
-				'discounted_price' => '',
-				'legacy_fields' => array(),
 				'price_source_config' => isset($pricing_config['price_source']) ? $pricing_config['price_source'] : 'estimated',
 				'configured_price_source_key' => '',
 				'vat_percent' => isset($pricing_config['vat_percent']) ? $pricing_config['vat_percent'] : 0,
 				'rounding_mode' => isset($pricing_config['rounding_mode']) ? $pricing_config['rounding_mode'] : 'none',
 				'base_price' => '',
-				'adjusted_price' => '',
 				'subtotal_ex_vat' => '',
 				'price_incl_vat' => '',
 				'rounded_price' => '',
@@ -2551,27 +2542,10 @@ class LP_Cargonizer_Connector {
 				$item['fuel_surcharge'] = $calculated['fuel_surcharge'];
 				$item['toll_surcharge'] = $calculated['toll_surcharge'];
 				$item['handling_fee'] = $calculated['handling_fee'];
-				$item['adjusted_price'] = $calculated['adjusted_price'];
 				$item['subtotal_ex_vat'] = $calculated['subtotal_ex_vat'];
 				$item['price_incl_vat'] = $calculated['price_incl_vat'];
 				$item['rounded_price'] = $calculated['rounded_price'];
 				$item['final_price_ex_vat'] = $calculated['final_price_ex_vat'];
-
-				// Legacy-felter beholdes kun for bakoverkompatibilitet. Ikke del av ny prismodell.
-				$legacy_fixed_addition = (float) $calculated['fuel_surcharge'] + (float) $calculated['toll_surcharge'] + (float) $calculated['handling_fee'];
-				$item['fuel_amount'] = number_format($legacy_fixed_addition, 2, '.', '');
-				$item['toll_amount'] = number_format(0, 2, '.', '');
-				$item['discount_basis'] = $calculated['base_price'];
-				$item['discounted_base'] = $calculated['discounted_base'];
-				$item['negative_base_clamped'] = false;
-				$item['discounted_price'] = $calculated['final_price_ex_vat'];
-				$item['legacy_fields'] = array(
-					'fuel_amount' => $item['fuel_amount'],
-					'toll_amount' => $item['toll_amount'],
-					'discount_basis' => $item['discount_basis'],
-					'discounted_base' => $item['discounted_base'],
-					'discounted_price' => $item['discounted_price'],
-				);
 			}
 
 			$results[] = $item;
@@ -2749,7 +2723,7 @@ class LP_Cargonizer_Connector {
 									</span>
 									<div style="display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:8px;align-items:end;min-width:620px;">
 										<label style="display:flex;flex-direction:column;gap:4px;">
-										<span>Prisfelt brukt</span>
+										<span>Prisfelt brukt</span><small style="color:#646970;">Hvilken pris fra Cargonizer som brukes som grunnpris.</small>
 										<select class="lp-cargonizer-method-input" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][price_source]" <?php disabled(!$is_enabled); ?>>
 											<option value="estimated" <?php selected($price_source, 'estimated'); ?>>Estimert</option>
 											<option value="net" <?php selected($price_source, 'net'); ?>>Netto</option>
@@ -2758,27 +2732,27 @@ class LP_Cargonizer_Connector {
 										</select>
 									</label>
 										<label style="display:flex;flex-direction:column;gap:4px;">
-											<span>Rabatt (%)</span>
+											<span>Rabatt (%)</span><small style="color:#646970;">Rabatt trekkes kun fra grunnpris, ikke tillegg.</small>
 											<input class="small-text lp-cargonizer-method-input" type="number" min="0" max="100" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][discount_percent]" value="<?php echo esc_attr($discount_value); ?>" <?php disabled(!$is_enabled); ?>>
 										</label>
 										<label style="display:flex;flex-direction:column;gap:4px;">
-											<span>Drivstofftillegg (kr)</span>
+											<span>Drivstofftillegg (kr)</span><small style="color:#646970;">Fast kronepåslag.</small>
 											<input class="small-text lp-cargonizer-method-input" type="number" min="0" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][fuel_surcharge]" value="<?php echo esc_attr($fuel_surcharge); ?>" <?php disabled(!$is_enabled); ?>>
 										</label>
 										<label style="display:flex;flex-direction:column;gap:4px;">
-											<span>Bomtillegg (kr)</span>
+											<span>Bomtillegg (kr)</span><small style="color:#646970;">Fast kronepåslag.</small>
 											<input class="small-text lp-cargonizer-method-input" type="number" min="0" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][toll_surcharge]" value="<?php echo esc_attr($toll_surcharge); ?>" <?php disabled(!$is_enabled); ?>>
 										</label>
 										<label style="display:flex;flex-direction:column;gap:4px;">
-											<span>Håndteringstillegg (kr)</span>
+											<span>Håndteringstillegg (kr)</span><small style="color:#646970;">Fast kronepåslag.</small>
 											<input class="small-text lp-cargonizer-method-input" type="number" min="0" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][handling_fee]" value="<?php echo esc_attr($handling_fee); ?>" <?php disabled(!$is_enabled); ?>>
 										</label>
 										<label style="display:flex;flex-direction:column;gap:4px;">
-											<span>MVA (%)</span>
+											<span>MVA (%)</span><small style="color:#646970;">Legges på etter rabatt og tillegg.</small>
 											<input class="small-text lp-cargonizer-method-input" type="number" min="0" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][vat_percent]" value="<?php echo esc_attr($vat_percent); ?>" <?php disabled(!$is_enabled); ?>>
 										</label>
 										<label style="display:flex;flex-direction:column;gap:4px;">
-											<span>Avrunding</span>
+											<span>Avrunding</span><small style="color:#646970;">Hvordan sluttprisen avrundes.</small>
 											<select class="lp-cargonizer-method-input" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][rounding_mode]" <?php disabled(!$is_enabled); ?>>
 												<option value="none" <?php selected($rounding_mode, 'none'); ?>>Ingen avrunding</option>
 												<option value="nearest_1" <?php selected($rounding_mode, 'nearest_1'); ?>>Nærmeste 1 kr</option>
