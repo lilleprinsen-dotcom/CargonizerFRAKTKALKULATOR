@@ -798,11 +798,13 @@ class LP_Cargonizer_Connector {
 	private function build_estimate_request_xml($payload, $method) {
 		$recipient = isset($payload['recipient']) && is_array($payload['recipient']) ? $payload['recipient'] : array();
 		$packages = isset($payload['packages']) && is_array($payload['packages']) ? $payload['packages'] : array();
+		$package_count = count($packages);
 
 		$xml = new SimpleXMLElement('<consignments/>');
 		$consignment = $xml->addChild('consignment');
 		$consignment->addAttribute('transport_agreement', isset($method['agreement_id']) ? (string) $method['agreement_id'] : '');
 		$consignment->addChild('product', esc_html(isset($method['product_id']) ? $method['product_id'] : ''));
+		$consignment->addChild('number_of_packages', (string) max(1, $package_count));
 
 		$parts = $consignment->addChild('parts');
 		$consignee = $parts->addChild('consignee');
@@ -824,12 +826,16 @@ class LP_Cargonizer_Connector {
 			$width_cm = isset($package['width']) ? (float) $package['width'] : 0;
 			$height_cm = isset($package['height']) ? (float) $package['height'] : 0;
 			$volume_dm3 = ($length_cm * $width_cm * $height_cm) / 1000;
+			$description = isset($package['description']) ? trim((string) $package['description']) : '';
 
 			$item = $items->addChild('item');
 			$item->addAttribute('type', 'package');
 			$item->addAttribute('amount', '1');
 			$item->addAttribute('weight', (string) max(0, $weight));
 			$item->addAttribute('volume', (string) max(0, $volume_dm3));
+			$item->addChild('description', esc_html($description));
+			$item->addChild('weight', (string) max(0, $weight));
+			$item->addChild('volume', (string) max(0, $volume_dm3));
 		}
 
 		return $xml->asXML();
