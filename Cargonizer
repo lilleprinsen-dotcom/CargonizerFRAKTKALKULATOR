@@ -153,15 +153,22 @@ class LP_Cargonizer_Connector {
 				? $this->sanitize_discount_percent($pricing['discount_percent'])
 				: (isset($output['method_discounts'][$clean_key]) ? $output['method_discounts'][$clean_key] : 0);
 
+			$fuel_surcharge = $this->sanitize_non_negative_number(isset($pricing['fuel_surcharge']) ? $pricing['fuel_surcharge'] : 0);
+			$toll_surcharge = $this->sanitize_non_negative_number(isset($pricing['toll_surcharge']) ? $pricing['toll_surcharge'] : 0);
+			$handling_fee = $this->sanitize_non_negative_number(isset($pricing['handling_fee']) ? $pricing['handling_fee'] : 0);
+
 			$output['method_pricing'][$clean_key] = array(
 				'discount_percent' => $discount_percent,
+				'fuel_surcharge' => $fuel_surcharge,
+				'toll_surcharge' => $toll_surcharge,
+				'handling_fee' => $handling_fee,
 				'fuel_type' => $this->sanitize_adjustment_type(isset($pricing['fuel_type']) ? $pricing['fuel_type'] : 'fixed'),
 				'fuel_value' => $this->sanitize_non_negative_number(isset($pricing['fuel_value']) ? $pricing['fuel_value'] : 0),
 				'toll_type' => $this->sanitize_adjustment_type(isset($pricing['toll_type']) ? $pricing['toll_type'] : 'fixed'),
 				'toll_value' => $this->sanitize_non_negative_number(isset($pricing['toll_value']) ? $pricing['toll_value'] : 0),
 				'toll_percent_max' => $this->sanitize_non_negative_number(isset($pricing['toll_percent_max']) ? $pricing['toll_percent_max'] : 0),
 				'price_source' => $this->sanitize_price_source(isset($pricing['price_source']) ? $pricing['price_source'] : 'estimated'),
-				'fixed_addition' => $this->sanitize_non_negative_number(isset($pricing['fixed_addition']) ? $pricing['fixed_addition'] : 0),
+				'fixed_addition' => $this->sanitize_non_negative_number(isset($pricing['fixed_addition']) ? $pricing['fixed_addition'] : ($fuel_surcharge + $toll_surcharge + $handling_fee)),
 				'percentage_addition' => $this->sanitize_non_negative_number(isset($pricing['percentage_addition']) ? $pricing['percentage_addition'] : 0),
 				'vat_percent' => $this->sanitize_non_negative_number(isset($pricing['vat_percent']) ? $pricing['vat_percent'] : 0),
 				'rounding_mode' => $this->sanitize_rounding_mode(isset($pricing['rounding_mode']) ? $pricing['rounding_mode'] : 'none'),
@@ -456,6 +463,9 @@ class LP_Cargonizer_Connector {
 	private function get_default_method_pricing() {
 		return array(
 			'discount_percent' => 0,
+			'fuel_surcharge' => 0,
+			'toll_surcharge' => 0,
+			'handling_fee' => 0,
 			'fuel_type' => 'fixed',
 			'fuel_value' => 0,
 			'toll_type' => 'fixed',
@@ -485,6 +495,15 @@ class LP_Cargonizer_Connector {
 			$price_source = isset($raw['price_source'])
 				? $this->sanitize_price_source($raw['price_source'])
 				: 'estimated';
+			$fuel_surcharge = isset($raw['fuel_surcharge'])
+				? $this->sanitize_non_negative_number($raw['fuel_surcharge'])
+				: 0;
+			$toll_surcharge = isset($raw['toll_surcharge'])
+				? $this->sanitize_non_negative_number($raw['toll_surcharge'])
+				: 0;
+			$handling_fee = isset($raw['handling_fee'])
+				? $this->sanitize_non_negative_number($raw['handling_fee'])
+				: 0;
 			$fixed_addition = isset($raw['fixed_addition'])
 				? $this->sanitize_non_negative_number($raw['fixed_addition'])
 				: 0;
@@ -509,8 +528,22 @@ class LP_Cargonizer_Connector {
 					+ max(0, $legacy_toll_type === 'fixed' ? $legacy_toll_value : 0);
 			}
 
+			if (!isset($raw['fuel_surcharge']) && !isset($raw['toll_surcharge']) && !isset($raw['handling_fee'])) {
+				$fuel_surcharge = $fixed_addition;
+				$toll_surcharge = 0;
+				$handling_fee = 0;
+			} else {
+				$fixed_addition = $fuel_surcharge + $toll_surcharge + $handling_fee;
+				if (!isset($raw['percentage_addition'])) {
+					$percentage_addition = 0 - (isset($raw['discount_percent']) ? $this->sanitize_discount_percent($raw['discount_percent']) : $default['discount_percent']);
+				}
+			}
+
 			$result[$method_key] = array(
 				'discount_percent' => isset($raw['discount_percent']) ? $this->sanitize_discount_percent($raw['discount_percent']) : $default['discount_percent'],
+				'fuel_surcharge' => round($fuel_surcharge, 2),
+				'toll_surcharge' => round($toll_surcharge, 2),
+				'handling_fee' => round($handling_fee, 2),
 				'fuel_type' => $this->sanitize_adjustment_type(isset($raw['fuel_type']) ? $raw['fuel_type'] : $default['fuel_type']),
 				'fuel_value' => $this->sanitize_non_negative_number(isset($raw['fuel_value']) ? $raw['fuel_value'] : $default['fuel_value']),
 				'toll_type' => $this->sanitize_adjustment_type(isset($raw['toll_type']) ? $raw['toll_type'] : $default['toll_type']),
@@ -2675,7 +2708,7 @@ class LP_Cargonizer_Connector {
 
 
 					<h2>Tilgjengelige fraktmetoder i kalkulator</h2>
-					<p>Kun valgte metoder vises for admin ved estimering av fraktkostnad. Ny prismodell beregner sluttpris basert på valgt prisfelt fra Cargonizer, fast tillegg, prosentpåslag, mva, valgt avrunding og sluttpris eks. mva.</p>
+					<p>Kun valgte metoder vises for admin ved estimering av fraktkostnad. Prismodellen per metode bruker valgt prisfelt, rabatt, drivstofftillegg, bomtillegg, håndteringsgebyr, mva og avrunding.</p>
 
 					<?php if (!empty($settings['available_methods']) && is_array($settings['available_methods'])) : ?>
 						<div style="max-height:260px;overflow:auto;border:1px solid #dcdcde;padding:12px;background:#fff;">
@@ -2684,19 +2717,15 @@ class LP_Cargonizer_Connector {
 								$method_key = isset($method['key']) ? (string) $method['key'] : '';
 								$is_enabled = in_array($method_key, $settings['enabled_methods'], true);
 								$method_discounts = isset($settings['method_discounts']) && is_array($settings['method_discounts']) ? $settings['method_discounts'] : array();
-									$method_pricing = isset($settings['method_pricing']) && is_array($settings['method_pricing']) ? $settings['method_pricing'] : array();
-									$pricing = isset($method_pricing[$method_key]) && is_array($method_pricing[$method_key]) ? $method_pricing[$method_key] : array();
-									$discount_value = isset($pricing['discount_percent']) ? $this->sanitize_discount_percent($pricing['discount_percent']) : (isset($method_discounts[$method_key]) ? $this->sanitize_discount_percent($method_discounts[$method_key]) : 0);
-									$fuel_type = $this->sanitize_adjustment_type(isset($pricing['fuel_type']) ? $pricing['fuel_type'] : 'fixed');
-									$fuel_value = $this->sanitize_non_negative_number(isset($pricing['fuel_value']) ? $pricing['fuel_value'] : 0);
-									$toll_type = $this->sanitize_adjustment_type(isset($pricing['toll_type']) ? $pricing['toll_type'] : 'fixed');
-									$toll_value = $this->sanitize_non_negative_number(isset($pricing['toll_value']) ? $pricing['toll_value'] : 0);
-									$toll_percent_max = $this->sanitize_non_negative_number(isset($pricing['toll_percent_max']) ? $pricing['toll_percent_max'] : 0);
-									$price_source = $this->sanitize_price_source(isset($pricing['price_source']) ? $pricing['price_source'] : 'estimated');
-									$fixed_addition = $this->sanitize_non_negative_number(isset($pricing['fixed_addition']) ? $pricing['fixed_addition'] : 0);
-									$percentage_addition = $this->sanitize_non_negative_number(isset($pricing['percentage_addition']) ? $pricing['percentage_addition'] : 0);
-									$vat_percent = $this->sanitize_non_negative_number(isset($pricing['vat_percent']) ? $pricing['vat_percent'] : 0);
-									$rounding_mode = $this->sanitize_rounding_mode(isset($pricing['rounding_mode']) ? $pricing['rounding_mode'] : 'none');
+										$method_pricing = isset($settings['method_pricing']) && is_array($settings['method_pricing']) ? $settings['method_pricing'] : array();
+										$pricing = isset($method_pricing[$method_key]) && is_array($method_pricing[$method_key]) ? $method_pricing[$method_key] : array();
+										$discount_value = isset($pricing['discount_percent']) ? $this->sanitize_discount_percent($pricing['discount_percent']) : (isset($method_discounts[$method_key]) ? $this->sanitize_discount_percent($method_discounts[$method_key]) : 0);
+										$price_source = $this->sanitize_price_source(isset($pricing['price_source']) ? $pricing['price_source'] : 'estimated');
+										$fuel_surcharge = $this->sanitize_non_negative_number(isset($pricing['fuel_surcharge']) ? $pricing['fuel_surcharge'] : (isset($pricing['fixed_addition']) ? $pricing['fixed_addition'] : 0));
+										$toll_surcharge = $this->sanitize_non_negative_number(isset($pricing['toll_surcharge']) ? $pricing['toll_surcharge'] : 0);
+										$handling_fee = $this->sanitize_non_negative_number(isset($pricing['handling_fee']) ? $pricing['handling_fee'] : 0);
+										$vat_percent = $this->sanitize_non_negative_number(isset($pricing['vat_percent']) ? $pricing['vat_percent'] : 0);
+										$rounding_mode = $this->sanitize_rounding_mode(isset($pricing['rounding_mode']) ? $pricing['rounding_mode'] : 'none');
 								?>
 								<div style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px solid #f0f0f1;">
 									<input class="lp-cargonizer-method-toggle" type="checkbox" name="lp_cargonizer_enabled_methods[]" value="<?php echo esc_attr($method_key); ?>" <?php checked($is_enabled); ?>>
@@ -2712,46 +2741,36 @@ class LP_Cargonizer_Connector {
 									</span>
 									<div style="display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:8px;align-items:end;min-width:620px;">
 										<label style="display:flex;flex-direction:column;gap:4px;">
-											<span>Legacy rabatt (%)</span>
-											<small style="color:#646970;">Brukes kun for bakoverkompatibilitet når nye felter ikke er satt.</small>
-											<input class="small-text lp-cargonizer-method-input" type="number" min="0" max="100" step="0.01" name="lp_cargonizer_method_discounts[<?php echo esc_attr($method_key); ?>]" value="<?php echo esc_attr($discount_value); ?>" <?php disabled(!$is_enabled); ?>>
-											<input class="small-text lp-cargonizer-method-input" type="hidden" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][discount_percent]" value="<?php echo esc_attr($discount_value); ?>" <?php disabled(!$is_enabled); ?>>
-										</label>
-										<label style="display:flex;flex-direction:column;gap:4px;">
-											<span>Legacy drivstoff</span>
-											<small style="color:#646970;">Brukes kun for bakoverkompatibilitet når nye felter ikke er satt.</small>
-											<div style="display:flex;gap:4px;align-items:center;">
-												<input class="small-text lp-cargonizer-method-input" type="number" min="0" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][fuel_value]" value="<?php echo esc_attr($fuel_value); ?>" <?php disabled(!$is_enabled); ?>>
-												<select class="lp-cargonizer-method-input" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][fuel_type]" <?php disabled(!$is_enabled); ?>>
-													<option value="fixed" <?php selected($fuel_type, 'fixed'); ?>>kr</option>
-													<option value="percent" <?php selected($fuel_type, 'percent'); ?>>%</option>
-												</select>
-											</div>
-										</label>
-										<label style="display:flex;flex-direction:column;gap:4px;">
-											<span>Legacy bom</span>
-											<small style="color:#646970;">Brukes kun for bakoverkompatibilitet når nye felter ikke er satt.</small>
-											<div style="display:flex;gap:4px;align-items:center;">
-												<input class="small-text lp-cargonizer-method-input" type="number" min="0" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][toll_value]" value="<?php echo esc_attr($toll_value); ?>" <?php disabled(!$is_enabled); ?>>
-												<select class="lp-cargonizer-method-input lp-cargonizer-toll-type" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][toll_type]" <?php disabled(!$is_enabled); ?>>
-													<option value="fixed" <?php selected($toll_type, 'fixed'); ?>>kr</option>
-													<option value="percent" <?php selected($toll_type, 'percent'); ?>>%</option>
-												</select>
-											</div>
-											<input class="small-text lp-cargonizer-method-input lp-cargonizer-toll-max" type="number" min="0" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][toll_percent_max]" value="<?php echo esc_attr($toll_percent_max); ?>" placeholder="Maks ved %" <?php disabled(!$is_enabled); ?>>
-										</label>
-										<label style="display:flex;flex-direction:column;gap:4px;">
-											<span>Ny prismodell</span>
-											<small style="color:#646970;">Valgt prisfelt + fast tillegg + prosentpåslag + mva + avrunding =&gt; sluttpris eks. mva.</small>
+											<span>Prisfelt</span>
 											<select class="lp-cargonizer-method-input" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][price_source]" <?php disabled(!$is_enabled); ?>>
 												<option value="estimated" <?php selected($price_source, 'estimated'); ?>>estimated</option>
 												<option value="net" <?php selected($price_source, 'net'); ?>>net</option>
 												<option value="gross" <?php selected($price_source, 'gross'); ?>>gross</option>
 												<option value="fallback" <?php selected($price_source, 'fallback'); ?>>fallback</option>
 											</select>
-											<input class="small-text lp-cargonizer-method-input" type="number" min="0" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][fixed_addition]" value="<?php echo esc_attr($fixed_addition); ?>" placeholder="Fast tillegg kr" <?php disabled(!$is_enabled); ?>>
-											<input class="small-text lp-cargonizer-method-input" type="number" min="0" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][percentage_addition]" value="<?php echo esc_attr($percentage_addition); ?>" placeholder="Påslag %" <?php disabled(!$is_enabled); ?>>
-											<input class="small-text lp-cargonizer-method-input" type="number" min="0" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][vat_percent]" value="<?php echo esc_attr($vat_percent); ?>" placeholder="MVA %" <?php disabled(!$is_enabled); ?>>
+										</label>
+										<label style="display:flex;flex-direction:column;gap:4px;">
+											<span>Rabatt (%)</span>
+											<input class="small-text lp-cargonizer-method-input" type="number" min="0" max="100" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][discount_percent]" value="<?php echo esc_attr($discount_value); ?>" <?php disabled(!$is_enabled); ?>>
+										</label>
+										<label style="display:flex;flex-direction:column;gap:4px;">
+											<span>Drivstofftillegg (kr)</span>
+											<input class="small-text lp-cargonizer-method-input" type="number" min="0" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][fuel_surcharge]" value="<?php echo esc_attr($fuel_surcharge); ?>" <?php disabled(!$is_enabled); ?>>
+										</label>
+										<label style="display:flex;flex-direction:column;gap:4px;">
+											<span>Bomtillegg (kr)</span>
+											<input class="small-text lp-cargonizer-method-input" type="number" min="0" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][toll_surcharge]" value="<?php echo esc_attr($toll_surcharge); ?>" <?php disabled(!$is_enabled); ?>>
+										</label>
+										<label style="display:flex;flex-direction:column;gap:4px;">
+											<span>Håndteringsgebyr (kr)</span>
+											<input class="small-text lp-cargonizer-method-input" type="number" min="0" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][handling_fee]" value="<?php echo esc_attr($handling_fee); ?>" <?php disabled(!$is_enabled); ?>>
+										</label>
+										<label style="display:flex;flex-direction:column;gap:4px;">
+											<span>MVA (%)</span>
+											<input class="small-text lp-cargonizer-method-input" type="number" min="0" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][vat_percent]" value="<?php echo esc_attr($vat_percent); ?>" <?php disabled(!$is_enabled); ?>>
+										</label>
+										<label style="display:flex;flex-direction:column;gap:4px;">
+											<span>Avrunding</span>
 											<select class="lp-cargonizer-method-input" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][rounding_mode]" <?php disabled(!$is_enabled); ?>>
 												<option value="none" <?php selected($rounding_mode, 'none'); ?>>Ingen avrunding</option>
 												<option value="nearest_1" <?php selected($rounding_mode, 'nearest_1'); ?>>Nærmeste 1 kr</option>
@@ -2774,25 +2793,9 @@ class LP_Cargonizer_Connector {
 							var row = toggle.closest('div');
 							if (!row) { return; }
 							var pricingInputs = row.querySelectorAll('.lp-cargonizer-method-input');
-							var visibleDiscount = row.querySelector('input[name^="lp_cargonizer_method_discounts["]');
-							var hiddenDiscount = row.querySelector('input[name*="[discount_percent]"]');
-							var tollType = row.querySelector('.lp-cargonizer-toll-type');
-							var tollMax = row.querySelector('.lp-cargonizer-toll-max');
-							var syncTollMax = function(){
-								if (!tollMax || !tollType) { return; }
-								tollMax.style.display = tollType.value === 'percent' ? 'block' : 'none';
-							};
 							var sync = function(){
 								pricingInputs.forEach(function(input){ input.disabled = !toggle.checked; });
-								if (visibleDiscount && hiddenDiscount) {
-									hiddenDiscount.value = visibleDiscount.value || '0';
-								}
-								syncTollMax();
 							};
-							if (visibleDiscount && hiddenDiscount) {
-								visibleDiscount.addEventListener('input', function(){ hiddenDiscount.value = visibleDiscount.value || '0'; });
-							}
-							if (tollType) { tollType.addEventListener('change', syncTollMax); }
 							toggle.addEventListener('change', sync);
 							sync();
 						});
