@@ -826,10 +826,10 @@ class LP_Cargonizer_Connector {
 			$volume_dm3 = ($length_cm * $width_cm * $height_cm) / 1000;
 
 			$item = $items->addChild('item');
-			$item->addChild('description', esc_html(isset($package['description']) ? $package['description'] : (isset($package['name']) ? $package['name'] : '')));
-			$item->addChild('quantity', '1');
-			$item->addChild('weight', (string) max(0, $weight));
-			$item->addChild('volume', (string) max(0, $volume_dm3));
+			$item->addAttribute('type', 'package');
+			$item->addAttribute('amount', '1');
+			$item->addAttribute('weight', (string) max(0, $weight));
+			$item->addAttribute('volume', (string) max(0, $volume_dm3));
 		}
 
 		return $xml->asXML();
