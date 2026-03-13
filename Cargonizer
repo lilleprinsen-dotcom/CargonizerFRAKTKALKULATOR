@@ -14,10 +14,14 @@ class LP_Cargonizer_Connector {
 	const OPTION_KEY = 'lp_cargonizer_settings';
 	const NONCE_ACTION_SAVE = 'lp_cargonizer_save_settings';
 	const NONCE_ACTION_FETCH = 'lp_cargonizer_fetch_methods';
+	const NONCE_ACTION_ORDER_DATA = 'lp_cargonizer_get_order_data';
 
 	public function __construct() {
 		add_action('admin_menu', array($this, 'add_admin_menu'), 99);
 		add_action('admin_init', array($this, 'register_settings'));
+		add_action('woocommerce_admin_order_actions_end', array($this, 'render_order_estimate_button'));
+		add_action('admin_footer', array($this, 'render_estimate_modal'));
+		add_action('wp_ajax_lp_cargonizer_get_order_estimate_data', array($this, 'ajax_get_order_estimate_data'));
 	}
 
 	public function add_admin_menu() {
@@ -243,6 +247,266 @@ class LP_Cargonizer_Connector {
 			}
 		}
 		return '';
+	}
+
+	public function render_order_estimate_button($order) {
+		if (!current_user_can('manage_woocommerce')) {
+			return;
+		}
+
+		if (!$order || !is_a($order, 'WC_Order')) {
+			return;
+		}
+
+		echo '<button type="button" class="button button-small lp-cargonizer-estimate-open" data-order-id="' . esc_attr($order->get_id()) . '" style="margin-left:6px;">Estimer fraktkostnad</button>';
+	}
+
+	public function render_estimate_modal() {
+		if (!current_user_can('manage_woocommerce')) {
+			return;
+		}
+
+		$screen = function_exists('get_current_screen') ? get_current_screen() : null;
+		if (!$screen || strpos((string) $screen->id, 'shop_order') === false) {
+			return;
+		}
+		?>
+		<div id="lp-cargonizer-estimate-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:100000;">
+			<div style="background:#fff;max-width:1100px;width:96%;max-height:90vh;overflow:auto;margin:3vh auto;padding:20px;border-radius:8px;box-shadow:0 20px 50px rgba(0,0,0,.25);position:relative;">
+				<button type="button" class="lp-cargonizer-close" style="position:absolute;right:16px;top:12px;border:none;background:transparent;font-size:26px;line-height:1;cursor:pointer;">&times;</button>
+				<h2 style="margin-top:0;">Estimer fraktkostnad</h2>
+				<div id="lp-cargonizer-estimate-loading" style="display:none;margin:12px 0;"><em>Laster ordredata...</em></div>
+				<div id="lp-cargonizer-estimate-error" style="display:none;margin:12px 0;color:#b32d2e;"></div>
+				<div id="lp-cargonizer-estimate-content" style="display:none;">
+					<div id="lp-cargonizer-estimate-overview" style="background:#f6f7f7;border:1px solid #dcdcde;padding:12px;margin-bottom:16px;"></div>
+					<div id="lp-cargonizer-estimate-recipient" style="background:#f6f7f7;border:1px solid #dcdcde;padding:12px;margin-bottom:16px;"></div>
+					<div id="lp-cargonizer-estimate-lines" style="margin-bottom:16px;"></div>
+					<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+						<h3 style="margin:0;">Kolli</h3>
+						<button type="button" class="button button-primary" id="lp-cargonizer-add-colli">+ Legg til kolli</button>
+					</div>
+					<div id="lp-cargonizer-colli-list" style="margin-top:10px;"></div>
+				</div>
+			</div>
+		</div>
+
+		<script>
+		(function(){
+			var modal = document.getElementById('lp-cargonizer-estimate-modal');
+			if (!modal) { return; }
+			var loading = document.getElementById('lp-cargonizer-estimate-loading');
+			var errorBox = document.getElementById('lp-cargonizer-estimate-error');
+			var content = document.getElementById('lp-cargonizer-estimate-content');
+			var overview = document.getElementById('lp-cargonizer-estimate-overview');
+			var recipient = document.getElementById('lp-cargonizer-estimate-recipient');
+			var lines = document.getElementById('lp-cargonizer-estimate-lines');
+			var colliList = document.getElementById('lp-cargonizer-colli-list');
+			var addBtn = document.getElementById('lp-cargonizer-add-colli');
+			var currentOrderId = null;
+
+			function esc(s){
+				s = (s === null || s === undefined) ? '' : String(s);
+				return s.replace(/[&<>"']/g, function(m){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]; });
+			}
+
+			function toNum(v){
+				var n = parseFloat(v);
+				return isNaN(n) ? 0 : n;
+			}
+
+			function volumeHtml(row){
+				var l = toNum(row.querySelector('.lp-l').value);
+				var w = toNum(row.querySelector('.lp-w').value);
+				var h = toNum(row.querySelector('.lp-h').value);
+				return (l * w * h).toFixed(2);
+			}
+
+			function bindVolume(row){
+				var out = row.querySelector('.lp-volume');
+				var fields = row.querySelectorAll('.lp-l,.lp-w,.lp-h');
+				fields.forEach(function(el){
+					el.addEventListener('input', function(){ out.textContent = volumeHtml(row); });
+				});
+				out.textContent = volumeHtml(row);
+			}
+
+			function createColli(pkg){
+				var row = document.createElement('div');
+				row.style.cssText = 'border:1px solid #dcdcde;padding:12px;margin-bottom:10px;background:#fff;';
+				row.innerHTML = '' +
+					'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">' +
+					'<strong>Kolli</strong><button type="button" class="button-link-delete lp-remove-colli">Fjern</button></div>' +
+					'<div style="display:grid;grid-template-columns:repeat(6,minmax(110px,1fr));gap:8px;margin-top:8px;">' +
+					'<label>Navn<input type="text" class="regular-text lp-name" style="width:100%;" value="'+esc(pkg.name || '')+'"></label>' +
+					'<label>Beskrivelse<input type="text" class="regular-text lp-desc" style="width:100%;" value="'+esc(pkg.description || '')+'"></label>' +
+					'<label>Vekt (kg)<input type="number" step="0.01" min="0" class="small-text lp-weight" style="width:100%;" value="'+esc(pkg.weight || '')+'"></label>' +
+					'<label>Lengde (cm)<input type="number" step="0.01" min="0" class="small-text lp-l" style="width:100%;" value="'+esc(pkg.length || '')+'"></label>' +
+					'<label>Bredde (cm)<input type="number" step="0.01" min="0" class="small-text lp-w" style="width:100%;" value="'+esc(pkg.width || '')+'"></label>' +
+					'<label>Høyde (cm)<input type="number" step="0.01" min="0" class="small-text lp-h" style="width:100%;" value="'+esc(pkg.height || '')+'"></label>' +
+					'</div>' +
+					'<div style="margin-top:8px;"><strong>Volum:</strong> <span class="lp-volume">0.00</span> cm³</div>';
+				row.querySelector('.lp-remove-colli').addEventListener('click', function(){ row.remove(); });
+				bindVolume(row);
+				colliList.appendChild(row);
+			}
+
+			function openModal(){ modal.style.display = 'block'; }
+			function closeModal(){ modal.style.display = 'none'; }
+
+			modal.addEventListener('click', function(e){
+				if (e.target === modal || e.target.classList.contains('lp-cargonizer-close')) { closeModal(); }
+			});
+
+			addBtn.addEventListener('click', function(){ createColli({}); });
+
+			document.addEventListener('click', function(e){
+				var btn = e.target.closest('.lp-cargonizer-estimate-open');
+				if (!btn) { return; }
+				e.preventDefault();
+				currentOrderId = btn.getAttribute('data-order-id');
+				openModal();
+				loading.style.display = 'block';
+				errorBox.style.display = 'none';
+				content.style.display = 'none';
+				colliList.innerHTML = '';
+
+				var form = new FormData();
+				form.append('action', 'lp_cargonizer_get_order_estimate_data');
+				form.append('nonce', '<?php echo esc_js(wp_create_nonce(self::NONCE_ACTION_ORDER_DATA)); ?>');
+				form.append('order_id', currentOrderId);
+
+				fetch(ajaxurl, { method:'POST', credentials:'same-origin', body: form })
+					.then(function(res){ return res.json(); })
+					.then(function(res){
+						loading.style.display = 'none';
+						if (!res || !res.success || !res.data) {
+							errorBox.textContent = 'Kunne ikke hente ordredata.';
+							errorBox.style.display = 'block';
+							return;
+						}
+
+						var d = res.data;
+						overview.innerHTML = '<h3 style="margin:0 0 8px 0;">Oversikt over sendingen</h3>' +
+							'<div><strong>Ordre:</strong> #' + esc(d.order.number) + '</div>' +
+							'<div><strong>Dato:</strong> ' + esc(d.order.date) + '</div>' +
+							'<div><strong>Total:</strong> ' + esc(d.order.total) + '</div>';
+
+						recipient.innerHTML = '<h3 style="margin:0 0 8px 0;">Kunde / mottaker</h3>' +
+							'<div><strong>Navn:</strong> ' + esc(d.recipient.name) + '</div>' +
+							'<div><strong>Adresse:</strong> ' + esc(d.recipient.address_1) + ' ' + esc(d.recipient.address_2) + ', ' + esc(d.recipient.postcode) + ' ' + esc(d.recipient.city) + ', ' + esc(d.recipient.country) + '</div>' +
+							'<div><strong>E-post:</strong> ' + esc(d.recipient.email) + '</div>' +
+							'<div><strong>Telefon:</strong> ' + esc(d.recipient.phone) + '</div>';
+
+						var rows = d.items.map(function(item){
+							return '<tr><td>'+esc(item.name)+'</td><td>'+esc(item.quantity)+'</td><td>'+esc(item.sku)+'</td></tr>';
+						}).join('');
+						lines.innerHTML = '<h3 style="margin:0 0 8px 0;">Ordrelinjer</h3><table class="widefat striped"><thead><tr><th>Produkt</th><th>Antall</th><th>SKU</th></tr></thead><tbody>' + (rows || '<tr><td colspan="3">Ingen ordrelinjer.</td></tr>') + '</tbody></table>';
+
+						if (Array.isArray(d.packages) && d.packages.length) {
+							d.packages.forEach(function(pkg){ createColli(pkg); });
+						} else {
+							createColli({});
+						}
+
+						content.style.display = 'block';
+					})
+					.catch(function(){
+						loading.style.display = 'none';
+						errorBox.textContent = 'Teknisk feil ved henting av ordredata.';
+						errorBox.style.display = 'block';
+					});
+			});
+		})();
+		</script>
+		<?php
+	}
+
+	public function ajax_get_order_estimate_data() {
+		if (!current_user_can('manage_woocommerce')) {
+			wp_send_json_error(array('message' => 'Ingen tilgang.'), 403);
+		}
+
+		$nonce = isset($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : '';
+		if (!wp_verify_nonce($nonce, self::NONCE_ACTION_ORDER_DATA)) {
+			wp_send_json_error(array('message' => 'Ugyldig nonce.'), 403);
+		}
+
+		$order_id = isset($_POST['order_id']) ? absint($_POST['order_id']) : 0;
+		$order = $order_id ? wc_get_order($order_id) : false;
+		if (!$order) {
+			wp_send_json_error(array('message' => 'Ordre ikke funnet.'), 404);
+		}
+
+		$items = array();
+		$packages = array();
+
+		foreach ($order->get_items() as $item) {
+			if (!is_a($item, 'WC_Order_Item_Product')) {
+				continue;
+			}
+
+			$product = $item->get_product();
+			$quantity = (int) $item->get_quantity();
+
+			$items[] = array(
+				'name' => $item->get_name(),
+				'quantity' => $quantity,
+				'sku' => $product ? $product->get_sku() : '',
+			);
+
+			if (!$product) {
+				continue;
+			}
+
+			$separate = get_post_meta($product->get_id(), '_wildrobot_separate_package_for_product', true);
+			if ($separate !== 'yes') {
+				continue;
+			}
+
+			$package_name = get_post_meta($product->get_id(), '_wildrobot_separate_package_for_product_name', true);
+			if ($package_name === '') {
+				$package_name = $item->get_name();
+			}
+
+			$base_package = array(
+				'name' => $package_name,
+				'description' => $item->get_name(),
+				'weight' => get_post_meta($product->get_id(), '_weight', true),
+				'length' => get_post_meta($product->get_id(), '_length', true),
+				'width' => get_post_meta($product->get_id(), '_width', true),
+				'height' => get_post_meta($product->get_id(), '_height', true),
+			);
+
+			for ($i = 0; $i < max(1, $quantity); $i++) {
+				$packages[] = $base_package;
+			}
+		}
+
+		$data = array(
+			'order' => array(
+				'number' => $order->get_order_number(),
+				'date' => $order->get_date_created() ? $order->get_date_created()->date_i18n('Y-m-d H:i') : '',
+				'total' => wp_strip_all_tags($order->get_formatted_order_total()),
+			),
+			'recipient' => array(
+				'name' => trim($order->get_shipping_first_name() . ' ' . $order->get_shipping_last_name()),
+				'address_1' => $order->get_shipping_address_1(),
+				'address_2' => $order->get_shipping_address_2(),
+				'postcode' => $order->get_shipping_postcode(),
+				'city' => $order->get_shipping_city(),
+				'country' => $order->get_shipping_country(),
+				'email' => $order->get_billing_email(),
+				'phone' => $order->get_billing_phone(),
+			),
+			'items' => $items,
+			'packages' => $packages,
+		);
+
+		if ($data['recipient']['name'] === '') {
+			$data['recipient']['name'] = trim($order->get_billing_first_name() . ' ' . $order->get_billing_last_name());
+		}
+
+		wp_send_json_success($data);
 	}
 
 	public function render_admin_page() {
