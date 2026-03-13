@@ -2740,7 +2740,7 @@ class LP_Cargonizer_Connector {
 
 
 					<h2>Tilgjengelige fraktmetoder i kalkulator</h2>
-					<p>Kun valgte metoder vises for admin ved estimering av fraktkostnad. Prismodellen per metode bruker valgt prisfelt, rabatt, drivstofftillegg, bomtillegg, håndteringsgebyr, mva og avrunding.</p>
+					<p>Kun valgte metoder vises for admin ved estimering av fraktkostnad. Prismodellen per metode bruker valgt prisfelt, rabatt, drivstofftillegg, bomtillegg, håndteringstillegg, mva og avrunding.</p>
 
 					<?php if (!empty($settings['available_methods']) && is_array($settings['available_methods'])) : ?>
 						<div style="max-height:260px;overflow:auto;border:1px solid #dcdcde;padding:12px;background:#fff;">
@@ -2773,14 +2773,14 @@ class LP_Cargonizer_Connector {
 									</span>
 									<div style="display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:8px;align-items:end;min-width:620px;">
 										<label style="display:flex;flex-direction:column;gap:4px;">
-											<span>Prisfelt</span>
-											<select class="lp-cargonizer-method-input" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][price_source]" <?php disabled(!$is_enabled); ?>>
-												<option value="estimated" <?php selected($price_source, 'estimated'); ?>>estimated</option>
-												<option value="net" <?php selected($price_source, 'net'); ?>>net</option>
-												<option value="gross" <?php selected($price_source, 'gross'); ?>>gross</option>
-												<option value="fallback" <?php selected($price_source, 'fallback'); ?>>fallback</option>
-											</select>
-										</label>
+										<span>Prisfelt brukt</span>
+										<select class="lp-cargonizer-method-input" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][price_source]" <?php disabled(!$is_enabled); ?>>
+											<option value="estimated" <?php selected($price_source, 'estimated'); ?>>Estimert</option>
+											<option value="net" <?php selected($price_source, 'net'); ?>>Netto</option>
+											<option value="gross" <?php selected($price_source, 'gross'); ?>>Brutto</option>
+											<option value="fallback" <?php selected($price_source, 'fallback'); ?>>Automatisk fallback</option>
+										</select>
+									</label>
 										<label style="display:flex;flex-direction:column;gap:4px;">
 											<span>Rabatt (%)</span>
 											<input class="small-text lp-cargonizer-method-input" type="number" min="0" max="100" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][discount_percent]" value="<?php echo esc_attr($discount_value); ?>" <?php disabled(!$is_enabled); ?>>
@@ -2794,7 +2794,7 @@ class LP_Cargonizer_Connector {
 											<input class="small-text lp-cargonizer-method-input" type="number" min="0" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][toll_surcharge]" value="<?php echo esc_attr($toll_surcharge); ?>" <?php disabled(!$is_enabled); ?>>
 										</label>
 										<label style="display:flex;flex-direction:column;gap:4px;">
-											<span>Håndteringsgebyr (kr)</span>
+											<span>Håndteringstillegg (kr)</span>
 											<input class="small-text lp-cargonizer-method-input" type="number" min="0" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][handling_fee]" value="<?php echo esc_attr($handling_fee); ?>" <?php disabled(!$is_enabled); ?>>
 										</label>
 										<label style="display:flex;flex-direction:column;gap:4px;">
