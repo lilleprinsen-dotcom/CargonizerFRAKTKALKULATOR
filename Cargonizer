@@ -872,9 +872,11 @@ class LP_Cargonizer_Connector {
 					return;
 				}
 
-				var html = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:8px;">';
+				var html = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px;">';
 				options.forEach(function(option){
 					var label = option.label || ((option.agreement_name || '') + ' - ' + (option.product_name || ''));
+					var agreementText = option.agreement_description || option.agreement_name || option.agreement_id || '—';
+					var productText = option.product_name || option.product_id || '—';
 					var smsServiceId = '';
 					var smsServiceName = '';
 					if (Array.isArray(option.services)) {
@@ -887,9 +889,14 @@ class LP_Cargonizer_Connector {
 							}
 						});
 					}
-					html += '<label style="display:flex;gap:8px;align-items:flex-start;padding:8px;border:1px solid #dcdcde;background:#fff;">' +
+					html += '<label style="display:flex;gap:10px;align-items:flex-start;padding:10px;border:1px solid #dcdcde;background:#fff;line-height:1.35;">' +
 						'<input type="checkbox" class="lp-shipping-option" data-agreement-id="'+esc(option.agreement_id || '')+'" data-agreement-name="'+esc(option.agreement_name || '')+'" data-agreement-description="'+esc(option.agreement_description || '')+'" data-agreement-number="'+esc(option.agreement_number || '')+'" data-carrier-id="'+esc(option.carrier_id || '')+'" data-carrier-name="'+esc(option.carrier_name || '')+'" data-product-id="'+esc(option.product_id || '')+'" data-product-name="'+esc(option.product_name || '')+'" data-sms-service-id="'+esc(smsServiceId)+'" data-sms-service-name="'+esc(smsServiceName)+'">' +
-						'<span><strong>'+esc(label)+'</strong><br><span style="color:#646970;">Transportør: '+esc(option.carrier_name || '—') + (option.carrier_id ? ' (' + esc(option.carrier_id) + ')' : '') + ' / Fraktavtale: ' + esc(option.agreement_description || option.agreement_name || option.agreement_id || '—') + (option.agreement_number ? ' (' + esc(option.agreement_number) + ')' : '') + ' / Agreement ID: '+esc(option.agreement_id || '—')+' / Produkt: '+esc(option.product_id || '—')+'</span></span>' +
+						'<span style="display:flex;flex-direction:column;gap:3px;">' +
+							'<strong>'+esc(label)+'</strong>' +
+							'<span style="color:#646970;">Transportør: '+esc(option.carrier_name || '—')+'</span>' +
+							'<span style="color:#646970;">Fraktavtale: '+esc(agreementText)+'</span>' +
+							'<span style="color:#646970;">Produkt: '+esc(productText)+'</span>' +
+						'</span>' +
 					'</label>';
 				});
 				html += '</div>';
