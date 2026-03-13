@@ -480,6 +480,7 @@ class LP_Cargonizer_Connector {
 			$default = $this->get_default_method_pricing();
 			$default['discount_percent'] = isset($discounts[$method_key]) ? $discounts[$method_key] : 0;
 			$raw = isset($pricing_settings[$method_key]) && is_array($pricing_settings[$method_key]) ? $pricing_settings[$method_key] : array();
+			$legacy_mapping_used = false;
 
 			$price_source = isset($raw['price_source'])
 				? $this->sanitize_price_source($raw['price_source'])
@@ -493,6 +494,7 @@ class LP_Cargonizer_Connector {
 
 			// Bakoverkompatibilitet: map gamle rabatt/drivstoff/bom-felt til ny modell hvis ny ikke finnes.
 			if (!isset($raw['price_source']) && !isset($raw['fixed_addition']) && !isset($raw['percentage_addition'])) {
+				$legacy_mapping_used = true;
 				$legacy_discount = isset($raw['discount_percent']) ? $this->sanitize_discount_percent($raw['discount_percent']) : $default['discount_percent'];
 				$legacy_fuel_type = $this->sanitize_adjustment_type(isset($raw['fuel_type']) ? $raw['fuel_type'] : $default['fuel_type']);
 				$legacy_fuel_value = $this->sanitize_non_negative_number(isset($raw['fuel_value']) ? $raw['fuel_value'] : $default['fuel_value']);
@@ -519,6 +521,7 @@ class LP_Cargonizer_Connector {
 				'percentage_addition' => round($percentage_addition, 2),
 				'vat_percent' => isset($raw['vat_percent']) ? $this->sanitize_non_negative_number($raw['vat_percent']) : 0,
 				'rounding_mode' => isset($raw['rounding_mode']) ? $this->sanitize_rounding_mode($raw['rounding_mode']) : 'none',
+				'legacy_mapping_used' => $legacy_mapping_used,
 			);
 		}
 
@@ -536,10 +539,7 @@ class LP_Cargonizer_Connector {
 				$rounded = round($rounded / 10) * 10;
 				break;
 			case 'price_ending_9':
-				$rounded = floor($rounded / 10) * 10 + 9;
-				if ($rounded < 0) {
-					$rounded = 9;
-				}
+				$rounded = $this->round_up_to_price_ending_9($rounded);
 				break;
 			case 'none':
 			default:
@@ -547,6 +547,21 @@ class LP_Cargonizer_Connector {
 		}
 
 		return round(max(0, $rounded), 2);
+	}
+
+	private function round_up_to_price_ending_9($value) {
+		// Strategi for price_ending_9: rund alltid opp til nærmeste pris som slutter på 9.
+		$number = (float) $value;
+		if ($number <= 9) {
+			return 9;
+		}
+
+		$candidate = floor($number / 10) * 10 + 9;
+		if ($candidate < $number) {
+			$candidate += 10;
+		}
+
+		return $candidate;
 	}
 
 	private function calculate_adjustment_amount($base_price, $type, $value, $max_value = null) {
@@ -1056,8 +1071,11 @@ class LP_Cargonizer_Connector {
 					'Prisfelt brukt: ' + source + ' = ' + selectedValue,
 					'Alternative prisfelt i respons: ' + (alternatives.length ? alternatives.join(', ') : 'ingen'),
 					'price_source_config: ' + (row.price_source_config || '—'),
+					'configured_price_source_key: ' + (row.configured_price_source_key || '—'),
 					'selected_price_source: ' + (row.selected_price_source || '—'),
 					'selected_price_value: ' + (row.selected_price_value || '—'),
+					'actual_fallback_priority: ' + (Array.isArray(row.actual_fallback_priority) ? row.actual_fallback_priority.join(' -> ') : '—'),
+					'fallback_step_used: ' + (row.fallback_step_used || '—'),
 					'price_source_fallback_used: ' + (row.price_source_fallback_used ? 'ja' : 'nei'),
 					'price_source_fallback_reason: ' + (row.price_source_fallback_reason || '—'),
 					'rounding_mode: ' + (row.rounding_mode || '—'),
@@ -1072,6 +1090,7 @@ class LP_Cargonizer_Connector {
 					'gross_amount: ' + (row.gross_amount || '—'),
 					'net_amount: ' + (row.net_amount || '—'),
 					'fallback_price: ' + (row.fallback_price || '—'),
+					'legacy_mapping_used: ' + (row.legacy_mapping_used ? 'ja' : 'nei'),
 					'legacy_fields_note: ' + (row.legacy_fields_note || '—'),
 					'Agreement: ' + (summary.agreement_id || row.agreement_id || '—'),
 					'Produkt: ' + (summary.product_id || row.product_id || '—'),
@@ -2122,6 +2141,8 @@ class LP_Cargonizer_Connector {
 			'configured_source' => $this->sanitize_price_source($configured_source),
 			'configured_key' => '',
 			'fallback_priority' => array(),
+			'actual_fallback_priority' => array(),
+			'fallback_step_used' => 0,
 			'used_fallback' => false,
 		);
 
@@ -2132,12 +2153,14 @@ class LP_Cargonizer_Connector {
 		$priority_data = $this->get_price_source_priority($selected['configured_source']);
 		$selected['configured_key'] = $priority_data['configured_key'];
 		$selected['fallback_priority'] = $priority_data['priority'];
+		$selected['actual_fallback_priority'] = $priority_data['priority'];
 
-		foreach ($priority_data['priority'] as $source) {
+		foreach ($priority_data['priority'] as $index => $source) {
 			$value = isset($price_fields[$source]) ? trim((string) $price_fields[$source]) : '';
 			if ($value !== '') {
 				$selected['source'] = $source;
 				$selected['value'] = $value;
+				$selected['fallback_step_used'] = $index + 1;
 				$selected['used_fallback'] = $source !== $priority_data['configured_key'];
 				return $selected;
 			}
@@ -2148,18 +2171,18 @@ class LP_Cargonizer_Connector {
 	}
 
 	private function get_price_source_priority($configured_source = 'estimated') {
-		$source_map = array(
-			'net' => 'net_amount',
-			'gross' => 'gross_amount',
-			'estimated' => 'estimated_cost',
-			'fallback' => 'fallback_price',
+		$source_priority_map = array(
+			'estimated' => array('estimated_cost', 'gross_amount', 'net_amount', 'fallback_price'),
+			'gross' => array('gross_amount', 'net_amount', 'estimated_cost', 'fallback_price'),
+			'net' => array('net_amount', 'gross_amount', 'estimated_cost', 'fallback_price'),
+			'fallback' => array('fallback_price', 'estimated_cost', 'gross_amount', 'net_amount'),
 		);
 
 		$configured = $this->sanitize_price_source($configured_source);
-		$configured_key = isset($source_map[$configured]) ? $source_map[$configured] : 'estimated_cost';
+		$priority = isset($source_priority_map[$configured]) ? $source_priority_map[$configured] : $source_priority_map['estimated'];
+		$configured_key = $priority[0];
 
 		// Fallback-prioriteten er eksplisitt for enklere feilsøking og mer forutsigbar prisvisning.
-		$priority = array($configured_key, 'net_amount', 'gross_amount', 'estimated_cost', 'fallback_price');
 		$priority = array_values(array_unique($priority));
 
 		return array(
@@ -2349,6 +2372,8 @@ class LP_Cargonizer_Connector {
 				'price_source_fallback_used' => false,
 				'price_source_fallback_reason' => '',
 				'price_source_priority' => array(),
+				'actual_fallback_priority' => array(),
+				'fallback_step_used' => 0,
 				'original_price' => '',
 				'discount_percent' => $discount_percent,
 				'fuel_type' => isset($pricing_config['fuel_type']) ? $pricing_config['fuel_type'] : 'fixed',
@@ -2363,8 +2388,10 @@ class LP_Cargonizer_Connector {
 				'negative_base_clamped' => false,
 				'discounted_price' => '',
 				'legacy_fields' => array(),
-				'legacy_fields_note' => 'Legacy-felter beholdes kun for bakoverkompatibilitet mot eksisterende UI.',
+				'legacy_fields_note' => 'Legacy-felter beholdes kun for bakoverkompatibilitet mot eksisterende UI. Legacy-konvertering er kun et anslag og ikke eksakt samme matematikk som gammel modell.',
+				'legacy_mapping_used' => !empty($pricing_config['legacy_mapping_used']),
 				'price_source_config' => isset($pricing_config['price_source']) ? $pricing_config['price_source'] : 'estimated',
+				'configured_price_source_key' => '',
 				'fixed_addition' => isset($pricing_config['fixed_addition']) ? $pricing_config['fixed_addition'] : 0,
 				'percentage_addition' => isset($pricing_config['percentage_addition']) ? $pricing_config['percentage_addition'] : 0,
 				'vat_percent' => isset($pricing_config['vat_percent']) ? $pricing_config['vat_percent'] : 0,
@@ -2464,8 +2491,11 @@ class LP_Cargonizer_Connector {
 			$selected_price = $this->select_estimate_price_value($price_fields, $item['price_source_config']);
 			$item['selected_price_source'] = $selected_price['source'];
 			$item['selected_price_value'] = $selected_price['value'];
+			$item['configured_price_source_key'] = isset($selected_price['configured_key']) ? $selected_price['configured_key'] : '';
 			$item['price_source_fallback_used'] = !empty($selected_price['used_fallback']);
 			$item['price_source_priority'] = isset($selected_price['fallback_priority']) ? $selected_price['fallback_priority'] : array();
+			$item['actual_fallback_priority'] = isset($selected_price['actual_fallback_priority']) ? $selected_price['actual_fallback_priority'] : array();
+			$item['fallback_step_used'] = isset($selected_price['fallback_step_used']) ? (int) $selected_price['fallback_step_used'] : 0;
 			if ($item['price_source_fallback_used']) {
 				$item['price_source_fallback_reason'] = 'Konfigurert kilde (' . (isset($selected_price['configured_key']) ? $selected_price['configured_key'] : 'ukjent') . ') manglet eller var tom. Brukte ' . ($selected_price['source'] !== '' ? $selected_price['source'] : 'ingen kilde') . '.';
 			}
