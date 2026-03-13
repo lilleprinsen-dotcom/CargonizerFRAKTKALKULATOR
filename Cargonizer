@@ -49,6 +49,8 @@ class LP_Cargonizer_Connector {
 		$output = array(
 			'api_key'   => isset($input['api_key']) ? sanitize_text_field($input['api_key']) : '',
 			'sender_id' => isset($input['sender_id']) ? sanitize_text_field($input['sender_id']) : '',
+			'available_methods' => isset($current['available_methods']) && is_array($current['available_methods']) ? $current['available_methods'] : array(),
+			'enabled_methods' => array(),
 		);
 
 		// Behold eksisterende verdi hvis felt sendes tomt ved et uhell.
@@ -59,6 +61,17 @@ class LP_Cargonizer_Connector {
 			$output['sender_id'] = $current['sender_id'];
 		}
 
+		if (isset($input['enabled_methods']) && is_array($input['enabled_methods'])) {
+			foreach ($input['enabled_methods'] as $method_key) {
+				$clean_key = sanitize_text_field($method_key);
+				if ($clean_key !== '') {
+					$output['enabled_methods'][] = $clean_key;
+				}
+			}
+		}
+
+		$output['enabled_methods'] = array_values(array_unique($output['enabled_methods']));
+
 		return $output;
 	}
 
@@ -66,6 +79,8 @@ class LP_Cargonizer_Connector {
 		$defaults = array(
 			'api_key'   => '',
 			'sender_id' => '',
+			'available_methods' => array(),
+			'enabled_methods' => array(),
 		);
 
 		$saved = get_option(self::OPTION_KEY, array());
@@ -169,6 +184,75 @@ class LP_Cargonizer_Connector {
 			'raw'     => $body,
 			'data'    => $parsed,
 		);
+	}
+
+
+	private function flatten_shipping_methods($agreements) {
+		$options = array();
+
+		if (!is_array($agreements)) {
+			return $options;
+		}
+
+		foreach ($agreements as $agreement) {
+			$agreement_id = isset($agreement['agreement_id']) ? (string) $agreement['agreement_id'] : '';
+			$agreement_name = isset($agreement['agreement_name']) ? (string) $agreement['agreement_name'] : '';
+
+			if (empty($agreement['products']) || !is_array($agreement['products'])) {
+				continue;
+			}
+
+			foreach ($agreement['products'] as $product) {
+				$product_id = isset($product['product_id']) ? (string) $product['product_id'] : '';
+				$product_name = isset($product['product_name']) ? (string) $product['product_name'] : '';
+				$key = implode('|', array($agreement_id, $product_id));
+
+				if ($key === '|') {
+					continue;
+				}
+
+				$options[] = array(
+					'key' => $key,
+					'agreement_id' => $agreement_id,
+					'agreement_name' => $agreement_name,
+					'product_id' => $product_id,
+					'product_name' => $product_name,
+					'label' => trim($agreement_name . ' - ' . $product_name),
+				);
+			}
+		}
+
+		return $options;
+	}
+
+	private function get_enabled_method_map() {
+		$settings = $this->get_settings();
+		$enabled = isset($settings['enabled_methods']) && is_array($settings['enabled_methods']) ? $settings['enabled_methods'] : array();
+		$map = array();
+		foreach ($enabled as $key) {
+			$clean_key = sanitize_text_field((string) $key);
+			if ($clean_key !== '') {
+				$map[$clean_key] = true;
+			}
+		}
+		return $map;
+	}
+
+	private function filter_options_by_enabled_methods($options) {
+		$enabled_map = $this->get_enabled_method_map();
+		if (empty($enabled_map)) {
+			return array();
+		}
+
+		$filtered = array();
+		foreach ($options as $option) {
+			$key = isset($option['key']) ? (string) $option['key'] : '';
+			if ($key !== '' && isset($enabled_map[$key])) {
+				$filtered[] = $option;
+			}
+		}
+
+		return $filtered;
 	}
 
 	private function parse_transport_agreements($xml) {
@@ -790,31 +874,10 @@ class LP_Cargonizer_Connector {
 			wp_send_json_error(array('message' => $result['message']), 400);
 		}
 
-		$options = array();
-		foreach ($result['data'] as $agreement) {
-			$agreement_id = isset($agreement['agreement_id']) ? (string) $agreement['agreement_id'] : '';
-			$agreement_name = isset($agreement['agreement_name']) ? (string) $agreement['agreement_name'] : '';
+		$options = $this->flatten_shipping_methods($result['data']);
+		$allowed_options = $this->filter_options_by_enabled_methods($options);
 
-			if (empty($agreement['products']) || !is_array($agreement['products'])) {
-				continue;
-			}
-
-			foreach ($agreement['products'] as $product) {
-				$product_id = isset($product['product_id']) ? (string) $product['product_id'] : '';
-				$product_name = isset($product['product_name']) ? (string) $product['product_name'] : '';
-
-				$options[] = array(
-					'key' => implode('|', array($agreement_id, $product_id)),
-					'agreement_id' => $agreement_id,
-					'agreement_name' => $agreement_name,
-					'product_id' => $product_id,
-					'product_name' => $product_name,
-					'label' => trim($agreement_name . ' - ' . $product_name),
-				);
-			}
-		}
-
-		wp_send_json_success(array('options' => $options));
+		wp_send_json_success(array('options' => $allowed_options));
 	}
 
 	private function build_estimate_request_xml($payload, $method) {
@@ -948,6 +1011,11 @@ class LP_Cargonizer_Connector {
 
 		$packages = isset($_POST['packages']) && is_array($_POST['packages']) ? wp_unslash($_POST['packages']) : array();
 		$methods = isset($_POST['methods']) && is_array($_POST['methods']) ? wp_unslash($_POST['methods']) : array();
+		$enabled_map = $this->get_enabled_method_map();
+
+		if (empty($enabled_map)) {
+			wp_send_json_error(array('message' => 'Ingen fraktmetoder er aktivert i Cargonizer-innstillingene.'), 400);
+		}
 
 		if (empty($packages) || empty($methods)) {
 			wp_send_json_error(array('message' => 'Mangler kolli eller fraktvalg.'), 400);
@@ -979,6 +1047,7 @@ class LP_Cargonizer_Connector {
 		}
 
 		$results = array();
+		$has_allowed_methods = false;
 		foreach ($methods as $method) {
 			$method_payload = array(
 				'agreement_id' => isset($method['agreement_id']) ? sanitize_text_field($method['agreement_id']) : '',
@@ -986,6 +1055,11 @@ class LP_Cargonizer_Connector {
 				'product_id' => isset($method['product_id']) ? sanitize_text_field($method['product_id']) : '',
 				'product_name' => isset($method['product_name']) ? sanitize_text_field($method['product_name']) : '',
 			);
+			$method_key = implode('|', array($method_payload['agreement_id'], $method_payload['product_id']));
+			if (!isset($enabled_map[$method_key])) {
+				continue;
+			}
+			$has_allowed_methods = true;
 
 			$xml = $this->build_estimate_request_xml(array(
 				'recipient' => $recipient,
@@ -1037,6 +1111,10 @@ class LP_Cargonizer_Connector {
 			$results[] = $item;
 		}
 
+		if (!$has_allowed_methods) {
+			wp_send_json_error(array('message' => 'Ingen av de valgte fraktmetodene er aktivert i Cargonizer-innstillingene.'), 400);
+		}
+
 		wp_send_json_success(array('results' => $results));
 	}
 
@@ -1047,6 +1125,7 @@ class LP_Cargonizer_Connector {
 
 		$settings = $this->get_settings();
 		$result   = null;
+		$method_refresh = null;
 
 		// Lagre innstillinger
 		if (
@@ -1057,8 +1136,11 @@ class LP_Cargonizer_Connector {
 			$new_settings = array(
 				'api_key'   => isset($_POST['lp_cargonizer_api_key']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_api_key'])) : '',
 				'sender_id' => isset($_POST['lp_cargonizer_sender_id']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_sender_id'])) : '',
+				'available_methods' => isset($settings['available_methods']) && is_array($settings['available_methods']) ? $settings['available_methods'] : array(),
+				'enabled_methods' => isset($_POST['lp_cargonizer_enabled_methods']) && is_array($_POST['lp_cargonizer_enabled_methods']) ? array_map('sanitize_text_field', wp_unslash($_POST['lp_cargonizer_enabled_methods'])) : array(),
 			);
 
+			$new_settings = $this->sanitize_settings($new_settings);
 			update_option(self::OPTION_KEY, $new_settings);
 			$settings = $this->get_settings();
 
@@ -1074,6 +1156,39 @@ class LP_Cargonizer_Connector {
 			$result = $this->fetch_transport_agreements();
 		}
 
+
+
+		if (
+			isset($_POST['lp_cargonizer_refresh_method_choices'])
+			&& isset($_POST['_wpnonce'])
+			&& wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['_wpnonce'])), self::NONCE_ACTION_FETCH)
+		) {
+			$method_refresh = $this->fetch_transport_agreements();
+			if ($method_refresh['success']) {
+				$available_methods = $this->flatten_shipping_methods($method_refresh['data']);
+				$enabled_map = array();
+				if (isset($settings['enabled_methods']) && is_array($settings['enabled_methods'])) {
+					foreach ($settings['enabled_methods'] as $saved_key) {
+						$enabled_map[(string) $saved_key] = true;
+					}
+				}
+				$new_enabled = array();
+				foreach ($available_methods as $method) {
+					$key = isset($method['key']) ? (string) $method['key'] : '';
+					if ($key !== '' && isset($enabled_map[$key])) {
+						$new_enabled[] = $key;
+					}
+				}
+
+				$settings['available_methods'] = $available_methods;
+				$settings['enabled_methods'] = $new_enabled;
+				update_option(self::OPTION_KEY, $this->sanitize_settings($settings));
+				$settings = $this->get_settings();
+				echo '<div class="notice notice-success"><p>Fraktmetoder ble hentet. Velg hvilke som skal være tilgjengelige og lagre innstillingene.</p></div>';
+			} else {
+				echo '<div class="notice notice-error"><p>' . esc_html($method_refresh['message']) . '</p></div>';
+			}
+		}
 		?>
 		<div class="wrap">
 			<h1>Cargonizer for WooCommerce</h1>
@@ -1127,6 +1242,33 @@ class LP_Cargonizer_Connector {
 							</tr>
 						</tbody>
 					</table>
+
+
+					<h2>Tilgjengelige fraktmetoder i kalkulator</h2>
+					<p>Kun valgte metoder vises for admin ved estimering av fraktkostnad.</p>
+
+					<?php if (!empty($settings['available_methods']) && is_array($settings['available_methods'])) : ?>
+						<div style="max-height:260px;overflow:auto;border:1px solid #dcdcde;padding:12px;background:#fff;">
+							<?php foreach ($settings['available_methods'] as $method) : ?>
+								<?php $method_key = isset($method['key']) ? (string) $method['key'] : ''; ?>
+								<label style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px solid #f0f0f1;">
+									<input type="checkbox" name="lp_cargonizer_enabled_methods[]" value="<?php echo esc_attr($method_key); ?>" <?php checked(in_array($method_key, $settings['enabled_methods'], true)); ?>>
+									<span>
+										<strong><?php echo esc_html(isset($method['label']) ? $method['label'] : 'Ukjent metode'); ?></strong><br>
+										<small>Agreement: <?php echo esc_html(isset($method['agreement_id']) ? $method['agreement_id'] : '—'); ?> / Produkt: <?php echo esc_html(isset($method['product_id']) ? $method['product_id'] : '—'); ?></small>
+									</span>
+								</label>
+							<?php endforeach; ?>
+						</div>
+					<?php else : ?>
+						<p><em>Ingen fraktmetoder hentet ennå. Klikk "Oppdater liste over fraktmetoder" først.</em></p>
+					<?php endif; ?>
+
+					<p>
+						<button type="submit" name="lp_cargonizer_refresh_method_choices" class="button button-secondary">
+							Oppdater liste over fraktmetoder
+						</button>
+					</p>
 
 					<p>
 						<button type="submit" name="lp_cargonizer_save_settings" class="button button-primary">
