@@ -732,6 +732,7 @@ class LP_Cargonizer_Connector {
 			var resultsContent = document.getElementById('lp-cargonizer-results-content');
 			var runEstimateBtn = document.getElementById('lp-cargonizer-run-estimate');
 			var currentOrderId = null;
+			var currentRecipient = {};
 			var latestEstimateResults = [];
 
 			function esc(s){
@@ -999,14 +1000,24 @@ class LP_Cargonizer_Connector {
 						infoText += ' Ingen servicepartnere returnert fra API.';
 					}
 					infoParts.push('<div style="color:#b32d2e;">'+esc(infoText)+'</div>');
-					if (partnerDebug && (partnerDebug.http_status || partnerDebug.error_message || partnerDebug.raw_response_body)) {
+					if (partnerDebug && (partnerDebug.http_status || partnerDebug.error_message || partnerDebug.raw_response_body || partnerDebug.request_url)) {
 						var spDebug = 'HTTP: ' + (partnerDebug.http_status || '—') +
 							' | Melding: ' + (partnerDebug.error_message || '—') +
 							' | URL: ' + (partnerDebug.request_url || '—');
 						if (partnerDebug.raw_response_body) {
-							spDebug += ' | Respons: ' + shortRaw(partnerDebug.raw_response_body, 250);
+							spDebug += ' | Kort respons: ' + shortRaw(partnerDebug.raw_response_body, 250);
 						}
 						infoParts.push('<div style="color:#646970;">'+esc(spDebug)+'</div>');
+					}
+					if (partnerDebug && partnerDebug.custom_params_debug) {
+						var customDebug = [];
+						Object.keys(partnerDebug.custom_params_debug).forEach(function(key){
+							var row = partnerDebug.custom_params_debug[key] || {};
+							customDebug.push(key + '=' + (row.value || '—') + ' (' + (row.source || 'unknown') + ')');
+						});
+						if (customDebug.length) {
+							infoParts.push('<div style="color:#646970;">Custom params brukt: '+esc(customDebug.join(' | '))+'</div>');
+						}
 					}
 				}
 				if (needsSms) {
@@ -1075,8 +1086,14 @@ class LP_Cargonizer_Connector {
 				var form = new FormData();
 				form.append('action', 'lp_cargonizer_get_servicepartner_options');
 				form.append('nonce', '<?php echo esc_js(wp_create_nonce(self::NONCE_ACTION_SERVICEPARTNERS)); ?>');
+				form.append('order_id', currentOrderId || '');
 				form.append('agreement_id', methodData.agreement_id || '');
 				form.append('product_id', methodData.product_id || '');
+				form.append('carrier_id', methodData.carrier_id || '');
+				form.append('carrier_name', methodData.carrier_name || '');
+				form.append('product_name', methodData.product_name || '');
+				form.append('recipient_country', (currentRecipient && currentRecipient.country) ? currentRecipient.country : '');
+				form.append('recipient_postcode', (currentRecipient && currentRecipient.postcode) ? currentRecipient.postcode : '');
 				return fetch(ajaxurl, { method:'POST', credentials:'same-origin', body: form })
 					.then(function(res){ return res.json(); })
 					.then(function(res){
@@ -1329,6 +1346,7 @@ class LP_Cargonizer_Connector {
 				colliList.innerHTML = '';
 				colliValidation.style.display = 'none';
 				latestEstimateResults = [];
+				currentRecipient = {};
 				resultsContent.innerHTML = 'Ingen estimater kjørt enda.';
 				shippingOptionsList.innerHTML = '<em>Laster fraktvalg...</em>';
 
@@ -1348,6 +1366,7 @@ class LP_Cargonizer_Connector {
 						}
 
 						var d = res.data;
+						currentRecipient = d.recipient || {};
 						overview.innerHTML = '<h3 style="margin:0 0 8px 0;">Oversikt over sendingen</h3>' +
 							'<div><strong>Ordre:</strong> #' + esc(d.order.number) + '</div>' +
 							'<div><strong>Dato:</strong> ' + esc(d.order.date) + '</div>' +
@@ -1619,9 +1638,67 @@ class LP_Cargonizer_Connector {
 		);
 	}
 
+
+	private function sanitize_country_code($value) {
+		$country = strtoupper(sanitize_text_field((string) $value));
+		if ($country === '' || strlen($country) > 2) {
+			return '';
+		}
+		return $country;
+	}
+
+	private function sanitize_postcode($value) {
+		return preg_replace('/[^A-Za-z0-9\- ]/', '', sanitize_text_field((string) $value));
+	}
+
+	private function detect_servicepartner_custom_params($method) {
+		$carrier_id = strtolower(sanitize_text_field(isset($method['carrier_id']) ? (string) $method['carrier_id'] : ''));
+		$carrier_name = strtolower(sanitize_text_field(isset($method['carrier_name']) ? (string) $method['carrier_name'] : ''));
+		$product_id = strtolower(sanitize_text_field(isset($method['product_id']) ? (string) $method['product_id'] : ''));
+		$product_name = strtolower(sanitize_text_field(isset($method['product_name']) ? (string) $method['product_name'] : ''));
+
+		$params = array();
+		$debug = array();
+
+		$is_bring = strpos($carrier_id, 'bring') !== false || strpos($carrier_name, 'bring') !== false;
+		$is_postnord = strpos($carrier_id, 'postnord') !== false || strpos($carrier_name, 'postnord') !== false;
+
+		if ($is_bring) {
+			$value = 'pickup_point';
+			if (strpos($product_name, 'locker') !== false || strpos($product_id, 'locker') !== false) {
+				$value = 'locker';
+			}
+			$params['pickupPointType'] = $value;
+			$debug['pickupPointType'] = array(
+				'value' => $value,
+				'source' => 'auto_detected_from_carrier_product',
+			);
+		}
+
+		if ($is_postnord) {
+			$value = 'pickup';
+			if (strpos($product_name, 'service') !== false || strpos($product_id, 'service') !== false) {
+				$value = 'service_point';
+			}
+			$params['typeId'] = $value;
+			$debug['typeId'] = array(
+				'value' => $value,
+				'source' => 'auto_detected_from_carrier_product',
+			);
+		}
+
+		return array(
+			'params' => $params,
+			'debug' => $debug,
+		);
+	}
+
+
 	private function fetch_servicepartner_options($method) {
 		$agreement_id = isset($method['agreement_id']) ? sanitize_text_field((string) $method['agreement_id']) : '';
 		$product_id = isset($method['product_id']) ? sanitize_text_field((string) $method['product_id']) : '';
+		$country = isset($method['country']) ? $this->sanitize_country_code($method['country']) : '';
+		$postcode = isset($method['postcode']) ? $this->sanitize_postcode($method['postcode']) : '';
 
 		$result = array(
 			'success' => false,
@@ -1630,6 +1707,7 @@ class LP_Cargonizer_Connector {
 			'raw_response_body' => '',
 			'request_url' => '',
 			'options' => array(),
+			'custom_params_debug' => array(),
 		);
 
 		if ($agreement_id === '' || $product_id === '') {
@@ -1637,10 +1715,27 @@ class LP_Cargonizer_Connector {
 			return $result;
 		}
 
-		$request_url = add_query_arg(array(
-			'transport_agreement' => $agreement_id,
+		$query = array(
+			'transport_agreement_id' => $agreement_id,
 			'product' => $product_id,
-		), 'https://api.cargonizer.no/servicepartners.xml');
+		);
+
+		if ($country !== '') {
+			$query['country'] = $country;
+		}
+		if ($postcode !== '') {
+			$query['postcode'] = $postcode;
+		}
+
+		$custom = $this->detect_servicepartner_custom_params($method);
+		if (!empty($custom['params']) && is_array($custom['params'])) {
+			foreach ($custom['params'] as $custom_key => $custom_value) {
+				$query['custom[params][' . $custom_key . ']'] = $custom_value;
+			}
+			$result['custom_params_debug'] = $custom['debug'];
+		}
+
+		$request_url = add_query_arg($query, 'https://api.cargonizer.no/service_partners.xml');
 		$result['request_url'] = $request_url;
 
 		$response = wp_remote_get($request_url, array(
@@ -1704,7 +1799,7 @@ class LP_Cargonizer_Connector {
 		$result['success'] = true;
 		$result['options'] = $options;
 		if (empty($options)) {
-			$result['error_message'] = 'Ingen servicepartnere returnert fra API.';
+			$result['error_message'] = 'Ingen servicepartnere returnert fra API for denne kombinasjonen av agreement, product, country og postcode';
 		}
 
 		return $result;
@@ -1720,10 +1815,23 @@ class LP_Cargonizer_Connector {
 			wp_send_json_error(array('message' => 'Ugyldig nonce.'), 403);
 		}
 
+		$order_id = isset($_POST['order_id']) ? absint($_POST['order_id']) : 0;
+		$order = $order_id ? wc_get_order($order_id) : false;
+
 		$method = array(
 			'agreement_id' => isset($_POST['agreement_id']) ? sanitize_text_field(wp_unslash($_POST['agreement_id'])) : '',
 			'product_id' => isset($_POST['product_id']) ? sanitize_text_field(wp_unslash($_POST['product_id'])) : '',
+			'carrier_id' => isset($_POST['carrier_id']) ? sanitize_text_field(wp_unslash($_POST['carrier_id'])) : '',
+			'carrier_name' => isset($_POST['carrier_name']) ? sanitize_text_field(wp_unslash($_POST['carrier_name'])) : '',
+			'product_name' => isset($_POST['product_name']) ? sanitize_text_field(wp_unslash($_POST['product_name'])) : '',
+			'country' => isset($_POST['recipient_country']) ? sanitize_text_field(wp_unslash($_POST['recipient_country'])) : '',
+			'postcode' => isset($_POST['recipient_postcode']) ? sanitize_text_field(wp_unslash($_POST['recipient_postcode'])) : '',
 		);
+
+		if ($order) {
+			$method['country'] = $order->get_shipping_country() !== '' ? $order->get_shipping_country() : $method['country'];
+			$method['postcode'] = $order->get_shipping_postcode() !== '' ? $order->get_shipping_postcode() : $method['postcode'];
+		}
 
 		$servicepartner_result = $this->fetch_servicepartner_options($method);
 
@@ -1736,7 +1844,7 @@ class LP_Cargonizer_Connector {
 
 		if (empty($servicepartner_result['options'])) {
 			wp_send_json_error(array(
-				'message' => 'Ingen servicepartnere returnert fra API.',
+				'message' => $servicepartner_result['error_message'] !== '' ? $servicepartner_result['error_message'] : 'Ingen servicepartnere returnert fra API for denne kombinasjonen av agreement, product, country og postcode',
 				'debug' => $servicepartner_result,
 			), 200);
 		}
@@ -2003,6 +2111,11 @@ class LP_Cargonizer_Connector {
 				'request_summary' => array(
 					'agreement_id' => $method_payload['agreement_id'],
 					'product_id' => $method_payload['product_id'],
+					'carrier_id' => $method_payload['carrier_id'],
+					'carrier_name' => $method_payload['carrier_name'],
+					'product_name' => $method_payload['product_name'],
+					'country' => isset($recipient['country']) ? $recipient['country'] : '',
+					'postcode' => isset($recipient['postcode']) ? $recipient['postcode'] : '',
 					'number_of_packages' => count($clean_packages),
 					'packages' => $clean_packages,
 					'selected_servicepartner' => $method_payload['servicepartner'],
@@ -2034,7 +2147,13 @@ class LP_Cargonizer_Connector {
 				}
 				$combined_error_text = strtolower(trim($item['error_code'] . ' ' . $item['parsed_error_message'] . ' ' . $item['error_details'] . ' ' . $item['error']));
 				if (strpos($combined_error_text, 'product_is_out_of_spec') !== false) {
-					$item['human_error'] = 'Produktet er utenfor spesifikasjon. Sannsynlige årsaker: antall kolli, vekt, mål, volum eller manglende påkrevde felter i request.';
+					$summary = $item['request_summary'];
+					$summary_text = 'agreement=' . (isset($summary['agreement_id']) ? $summary['agreement_id'] : '—') . ', product=' . (isset($summary['product_id']) ? $summary['product_id'] : '—') . ', country=' . (isset($summary['country']) ? $summary['country'] : '—') . ', postcode=' . (isset($summary['postcode']) ? $summary['postcode'] : '—') . ', kolli=' . (isset($summary['number_of_packages']) ? $summary['number_of_packages'] : '—') . ', servicepartner=' . (isset($summary['selected_servicepartner']) && $summary['selected_servicepartner'] !== '' ? $summary['selected_servicepartner'] : 'ikke valgt');
+					$item['human_error'] = 'Produktet er sannsynligvis utenfor spesifikasjon. Vanlige årsaker er antall kolli, mål, vekt, volum eller manglende obligatoriske felter for valgt produkt. Request: ' . $summary_text;
+					$is_pickup_related = strpos($combined_error_text, 'pickup') !== false || strpos($combined_error_text, 'servicepoint') !== false || strpos($combined_error_text, 'service point') !== false || strpos(strtolower($method_payload['product_name']), 'pickup') !== false || strpos(strtolower($method_payload['product_name']), 'locker') !== false || strpos(strtolower($method_payload['product_name']), 'service point') !== false;
+					if ($is_pickup_related && $method_payload['servicepartner'] === '') {
+						$item['human_error'] .= ' Valgt produkt ser ut til å være pickup point-relatert, og servicepartner er ikke valgt.';
+					}
 				} elseif (strpos($combined_error_text, 'servicepartner') !== false && (strpos($combined_error_text, 'må angis') !== false || strpos($combined_error_text, 'must be specified') !== false || strpos($combined_error_text, 'missing') !== false)) {
 					$item['human_error'] = 'Denne metoden krever servicepartner. Hent servicepartnere og velg en verdi før du prøver igjen.';
 				} elseif ((strpos($combined_error_text, 'kolli') !== false || strpos($combined_error_text, 'package') !== false) && (strpos($combined_error_text, 'max') !== false || strpos($combined_error_text, '1') !== false || strpos($combined_error_text, 'one') !== false)) {
@@ -2042,7 +2161,10 @@ class LP_Cargonizer_Connector {
 				}
 				if ($this->estimate_requires_servicepartner($combined_error_text)) {
 					$item['requires_servicepartner'] = true;
-					$servicepartner_result = $this->fetch_servicepartner_options($method_payload);
+					$servicepartner_lookup_method = $method_payload;
+					$servicepartner_lookup_method['country'] = isset($recipient['country']) ? $recipient['country'] : '';
+					$servicepartner_lookup_method['postcode'] = isset($recipient['postcode']) ? $recipient['postcode'] : '';
+					$servicepartner_result = $this->fetch_servicepartner_options($servicepartner_lookup_method);
 					$item['servicepartner_fetch'] = $servicepartner_result;
 					$item['servicepartner_options'] = isset($servicepartner_result['options']) && is_array($servicepartner_result['options']) ? $servicepartner_result['options'] : array();
 				}
