@@ -15,6 +15,8 @@ class LP_Cargonizer_Connector {
 	const NONCE_ACTION_SAVE = 'lp_cargonizer_save_settings';
 	const NONCE_ACTION_FETCH = 'lp_cargonizer_fetch_methods';
 	const NONCE_ACTION_ORDER_DATA = 'lp_cargonizer_get_order_data';
+	const NONCE_ACTION_FETCH_OPTIONS = 'lp_cargonizer_fetch_shipping_options';
+	const NONCE_ACTION_ESTIMATE = 'lp_cargonizer_run_bulk_estimate';
 
 	public function __construct() {
 		add_action('admin_menu', array($this, 'add_admin_menu'), 99);
@@ -22,6 +24,8 @@ class LP_Cargonizer_Connector {
 		add_action('woocommerce_admin_order_actions_end', array($this, 'render_order_estimate_button'));
 		add_action('admin_footer', array($this, 'render_estimate_modal'));
 		add_action('wp_ajax_lp_cargonizer_get_order_estimate_data', array($this, 'ajax_get_order_estimate_data'));
+		add_action('wp_ajax_lp_cargonizer_get_shipping_options', array($this, 'ajax_get_shipping_options'));
+		add_action('wp_ajax_lp_cargonizer_run_bulk_estimate', array($this, 'ajax_run_bulk_estimate'));
 	}
 
 	public function add_admin_menu() {
@@ -287,15 +291,16 @@ class LP_Cargonizer_Connector {
 					</div>
 					<div id="lp-cargonizer-colli-validation" style="display:none;margin-top:8px;padding:8px 10px;border:1px solid #dba617;background:#fcf9e8;color:#6d4f00;"></div>
 					<div id="lp-cargonizer-colli-list" style="margin-top:10px;"></div>
-					<div id="lp-cargonizer-estimate-shipping-options" style="margin-top:16px;padding:12px;border:1px dashed #c3c4c7;background:#fcfcfc;">
-						<h3 style="margin:0 0 8px 0;">Fraktvalg (kommer i neste batch)</h3>
-						<p style="margin:0;color:#646970;">Her vises tilgjengelige fraktalternativer etter at kolli-data sendes med AJAX.</p>
+					<div id="lp-cargonizer-estimate-shipping-options" style="margin-top:16px;padding:12px;border:1px solid #dcdcde;background:#f6f7f7;">
+						<h3 style="margin:0 0 8px 0;">Fraktvalg</h3>
+						<div id="lp-cargonizer-shipping-options-list"><em>Laster fraktvalg...</em></div>
 					</div>
-					<div id="lp-cargonizer-estimate-price-results" style="margin-top:12px;padding:12px;border:1px dashed #c3c4c7;background:#fcfcfc;">
-						<h3 style="margin:0 0 8px 0;">Prisresultater (kommer i neste batch)</h3>
-						<p style="margin:0;color:#646970;">Her vises estimerte priser når fraktlogikk implementeres.</p>
+					<div id="lp-cargonizer-estimate-price-results" style="margin-top:12px;padding:12px;border:1px solid #dcdcde;background:#fcfcfc;">
+						<h3 style="margin:0 0 8px 0;">Prisresultater</h3>
+						<div id="lp-cargonizer-results-content" style="color:#646970;">Ingen estimater kjørt enda.</div>
 					</div>
-					<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">
+					<div style="display:flex;justify-content:space-between;gap:8px;margin-top:16px;align-items:center;">
+						<button type="button" class="button button-primary" id="lp-cargonizer-run-estimate">Estimer fraktpris</button>
 						<button type="button" class="button" id="lp-cargonizer-close-bottom">Lukk</button>
 					</div>
 				</div>
@@ -316,6 +321,9 @@ class LP_Cargonizer_Connector {
 			var colliValidation = document.getElementById('lp-cargonizer-colli-validation');
 			var addBtn = document.getElementById('lp-cargonizer-add-colli');
 			var closeBottomBtn = document.getElementById('lp-cargonizer-close-bottom');
+			var shippingOptionsList = document.getElementById('lp-cargonizer-shipping-options-list');
+			var resultsContent = document.getElementById('lp-cargonizer-results-content');
+			var runEstimateBtn = document.getElementById('lp-cargonizer-run-estimate');
 			var currentOrderId = null;
 
 			function esc(s){
@@ -448,6 +456,132 @@ class LP_Cargonizer_Connector {
 				collectColliData();
 			}
 
+
+			function renderShippingOptions(options){
+				if (!Array.isArray(options) || !options.length) {
+					shippingOptionsList.innerHTML = '<em>Ingen fraktvalg funnet.</em>';
+					return;
+				}
+
+				var html = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:8px;">';
+				options.forEach(function(option){
+					var label = option.label || ((option.agreement_name || '') + ' - ' + (option.product_name || ''));
+					html += '<label style="display:flex;gap:8px;align-items:flex-start;padding:8px;border:1px solid #dcdcde;background:#fff;">' +
+						'<input type="checkbox" class="lp-shipping-option" data-agreement-id="'+esc(option.agreement_id || '')+'" data-agreement-name="'+esc(option.agreement_name || '')+'" data-product-id="'+esc(option.product_id || '')+'" data-product-name="'+esc(option.product_name || '')+'">' +
+						'<span><strong>'+esc(label)+'</strong><br><span style="color:#646970;">Agreement: '+esc(option.agreement_id || '—')+' / Produkt: '+esc(option.product_id || '—')+'</span></span>' +
+					'</label>';
+				});
+				html += '</div>';
+				shippingOptionsList.innerHTML = html;
+			}
+
+			function getSelectedMethods(){
+				var selected = [];
+				shippingOptionsList.querySelectorAll('.lp-shipping-option:checked').forEach(function(input){
+					selected.push({
+						agreement_id: input.getAttribute('data-agreement-id') || '',
+						agreement_name: input.getAttribute('data-agreement-name') || '',
+						product_id: input.getAttribute('data-product-id') || '',
+						product_name: input.getAttribute('data-product-name') || ''
+					});
+				});
+				return selected;
+			}
+
+			function renderEstimateResults(results){
+				if (!Array.isArray(results) || !results.length) {
+					resultsContent.innerHTML = '<em>Ingen resultater å vise.</em>';
+					return;
+				}
+				var rows = results.map(function(row){
+					return '<tr>' +
+						'<td>'+esc(row.method_name || 'Ukjent metode')+'</td>' +
+						'<td>'+esc((row.agreement_id || '') + (row.product_id ? ' / ' + row.product_id : ''))+'</td>' +
+						'<td>'+esc(row.estimated_price || '—')+'</td>' +
+						'<td>'+esc(row.status || 'unknown')+'</td>' +
+						'<td style="color:'+(row.error ? '#b32d2e' : '#2271b1')+';">'+esc(row.error || 'OK')+'</td>' +
+					'</tr>';
+				}).join('');
+				resultsContent.innerHTML = '<table class="widefat striped"><thead><tr><th>Fraktmetode / produkt</th><th>ID</th><th>Estimert pris</th><th>Status</th><th>Melding</th></tr></thead><tbody>'+rows+'</tbody></table>';
+			}
+
+			function fetchShippingOptions(){
+				shippingOptionsList.innerHTML = '<em>Laster fraktvalg...</em>';
+				var form = new FormData();
+				form.append('action', 'lp_cargonizer_get_shipping_options');
+				form.append('nonce', '<?php echo esc_js(wp_create_nonce(self::NONCE_ACTION_FETCH_OPTIONS)); ?>');
+				return fetch(ajaxurl, { method:'POST', credentials:'same-origin', body: form })
+					.then(function(res){ return res.json(); })
+					.then(function(res){
+						if (!res || !res.success || !res.data) {
+							shippingOptionsList.innerHTML = '<span style="color:#b32d2e;">Kunne ikke hente fraktvalg.</span>';
+							return;
+						}
+						renderShippingOptions(res.data.options || []);
+					})
+					.catch(function(){
+						shippingOptionsList.innerHTML = '<span style="color:#b32d2e;">Teknisk feil ved henting av fraktvalg.</span>';
+					});
+			}
+
+			function validateBeforeEstimate(){
+				var colli = collectColliData();
+				if (!colli.payload.packages || !colli.payload.packages.length) {
+					colliValidation.textContent = 'Du må legge til minst ett kolli.';
+					colliValidation.style.display = 'block';
+					return null;
+				}
+				if (!colli.isValid) {
+					return null;
+				}
+				var methods = getSelectedMethods();
+				if (!methods.length) {
+					resultsContent.innerHTML = '<span style="color:#b32d2e;">Velg minst én fraktmetode før estimering.</span>';
+					return null;
+				}
+				return { packages: colli.payload.packages, methods: methods };
+			}
+
+			function runEstimate(){
+				var validData = validateBeforeEstimate();
+				if (!validData) { return; }
+				runEstimateBtn.disabled = true;
+				runEstimateBtn.textContent = 'Estimerer...';
+				resultsContent.innerHTML = '<em>Henter estimater...</em>';
+
+				var form = new FormData();
+				form.append('action', 'lp_cargonizer_run_bulk_estimate');
+				form.append('nonce', '<?php echo esc_js(wp_create_nonce(self::NONCE_ACTION_ESTIMATE)); ?>');
+				form.append('order_id', currentOrderId);
+				validData.packages.forEach(function(pkg, idx){
+					Object.keys(pkg).forEach(function(key){
+						form.append('packages['+idx+']['+key+']', pkg[key]);
+					});
+				});
+				validData.methods.forEach(function(method, idx){
+					Object.keys(method).forEach(function(key){
+						form.append('methods['+idx+']['+key+']', method[key]);
+					});
+				});
+
+				fetch(ajaxurl, { method:'POST', credentials:'same-origin', body: form })
+					.then(function(res){ return res.json(); })
+					.then(function(res){
+						if (!res || !res.success || !res.data) {
+							resultsContent.innerHTML = '<span style="color:#b32d2e;">Estimering feilet.</span>';
+							return;
+						}
+						renderEstimateResults(res.data.results || []);
+					})
+					.catch(function(){
+						resultsContent.innerHTML = '<span style="color:#b32d2e;">Teknisk feil ved estimering.</span>';
+					})
+					.finally(function(){
+						runEstimateBtn.disabled = false;
+						runEstimateBtn.textContent = 'Estimer fraktpris';
+					});
+			}
+
 			function openModal(){ modal.style.display = 'block'; }
 			function closeModal(){ modal.style.display = 'none'; }
 
@@ -460,6 +594,7 @@ class LP_Cargonizer_Connector {
 			}
 
 			addBtn.addEventListener('click', function(){ createColli({}); });
+			runEstimateBtn.addEventListener('click', runEstimate);
 
 			document.addEventListener('click', function(e){
 				var btn = e.target.closest('.lp-cargonizer-estimate-open');
@@ -472,6 +607,8 @@ class LP_Cargonizer_Connector {
 				content.style.display = 'none';
 				colliList.innerHTML = '';
 				colliValidation.style.display = 'none';
+				resultsContent.innerHTML = 'Ingen estimater kjørt enda.';
+				shippingOptionsList.innerHTML = '<em>Laster fraktvalg...</em>';
 
 				var form = new FormData();
 				form.append('action', 'lp_cargonizer_get_order_estimate_data');
@@ -512,6 +649,7 @@ class LP_Cargonizer_Connector {
 						}
 
 						collectColliData();
+						fetchShippingOptions();
 
 						content.style.display = 'block';
 					})
@@ -612,6 +750,217 @@ class LP_Cargonizer_Connector {
 		}
 
 		wp_send_json_success($data);
+	}
+
+
+	public function ajax_get_shipping_options() {
+		if (!current_user_can('manage_woocommerce')) {
+			wp_send_json_error(array('message' => 'Ingen tilgang.'), 403);
+		}
+
+		$nonce = isset($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : '';
+		if (!wp_verify_nonce($nonce, self::NONCE_ACTION_FETCH_OPTIONS)) {
+			wp_send_json_error(array('message' => 'Ugyldig nonce.'), 403);
+		}
+
+		$result = $this->fetch_transport_agreements();
+		if (!$result['success']) {
+			wp_send_json_error(array('message' => $result['message']), 400);
+		}
+
+		$options = array();
+		foreach ($result['data'] as $agreement) {
+			$agreement_id = isset($agreement['agreement_id']) ? (string) $agreement['agreement_id'] : '';
+			$agreement_name = isset($agreement['agreement_name']) ? (string) $agreement['agreement_name'] : '';
+
+			if (empty($agreement['products']) || !is_array($agreement['products'])) {
+				continue;
+			}
+
+			foreach ($agreement['products'] as $product) {
+				$product_id = isset($product['product_id']) ? (string) $product['product_id'] : '';
+				$product_name = isset($product['product_name']) ? (string) $product['product_name'] : '';
+
+				$options[] = array(
+					'key' => implode('|', array($agreement_id, $product_id)),
+					'agreement_id' => $agreement_id,
+					'agreement_name' => $agreement_name,
+					'product_id' => $product_id,
+					'product_name' => $product_name,
+					'label' => trim($agreement_name . ' - ' . $product_name),
+				);
+			}
+		}
+
+		wp_send_json_success(array('options' => $options));
+	}
+
+	private function build_estimate_request_xml($payload, $method) {
+		$recipient = isset($payload['recipient']) && is_array($payload['recipient']) ? $payload['recipient'] : array();
+		$packages = isset($payload['packages']) && is_array($payload['packages']) ? $payload['packages'] : array();
+
+		$xml = new SimpleXMLElement('<consignment/>');
+		$transport = $xml->addChild('transport_agreement');
+		$transport->addChild('id', esc_html($method['agreement_id']));
+		$xml->addChild('product', esc_html($method['product_id']));
+
+		$consignee = $xml->addChild('consignee');
+		$consignee->addChild('name', esc_html(isset($recipient['name']) ? $recipient['name'] : ''));
+		$consignee->addChild('address1', esc_html(isset($recipient['address_1']) ? $recipient['address_1'] : ''));
+		$consignee->addChild('address2', esc_html(isset($recipient['address_2']) ? $recipient['address_2'] : ''));
+		$consignee->addChild('postcode', esc_html(isset($recipient['postcode']) ? $recipient['postcode'] : ''));
+		$consignee->addChild('city', esc_html(isset($recipient['city']) ? $recipient['city'] : ''));
+		$consignee->addChild('country', esc_html(isset($recipient['country']) ? $recipient['country'] : ''));
+
+		$parcelset = $xml->addChild('parcel_set');
+		foreach ($packages as $package) {
+			$pkg = $parcelset->addChild('parcel');
+			$pkg->addChild('kind', 'package');
+			$pkg->addChild('weight', isset($package['weight']) ? (string) $package['weight'] : '0');
+			$pkg->addChild('length', isset($package['length']) ? (string) $package['length'] : '0');
+			$pkg->addChild('width', isset($package['width']) ? (string) $package['width'] : '0');
+			$pkg->addChild('height', isset($package['height']) ? (string) $package['height'] : '0');
+			$pkg->addChild('description', esc_html(isset($package['description']) ? $package['description'] : ''));
+		}
+
+		return $xml->asXML();
+	}
+
+	private function parse_estimated_price($body) {
+		if (empty($body)) {
+			return '';
+		}
+
+		libxml_use_internal_errors(true);
+		$xml = simplexml_load_string($body);
+		if ($xml === false) {
+			libxml_clear_errors();
+			return '';
+		}
+
+		$paths = array(
+			'//estimated_price',
+			'//estimated-price',
+			'//price',
+			'//amount',
+			'//total',
+		);
+
+		foreach ($paths as $path) {
+			$found = $xml->xpath($path);
+			if (!empty($found)) {
+				$value = trim((string) $found[0]);
+				if ($value !== '') {
+					return $value;
+				}
+			}
+		}
+
+		return '';
+	}
+
+	public function ajax_run_bulk_estimate() {
+		if (!current_user_can('manage_woocommerce')) {
+			wp_send_json_error(array('message' => 'Ingen tilgang.'), 403);
+		}
+
+		$nonce = isset($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : '';
+		if (!wp_verify_nonce($nonce, self::NONCE_ACTION_ESTIMATE)) {
+			wp_send_json_error(array('message' => 'Ugyldig nonce.'), 403);
+		}
+
+		$order_id = isset($_POST['order_id']) ? absint($_POST['order_id']) : 0;
+		$order = $order_id ? wc_get_order($order_id) : false;
+		if (!$order) {
+			wp_send_json_error(array('message' => 'Ordre ikke funnet.'), 404);
+		}
+
+		$packages = isset($_POST['packages']) && is_array($_POST['packages']) ? wp_unslash($_POST['packages']) : array();
+		$methods = isset($_POST['methods']) && is_array($_POST['methods']) ? wp_unslash($_POST['methods']) : array();
+
+		if (empty($packages) || empty($methods)) {
+			wp_send_json_error(array('message' => 'Mangler kolli eller fraktvalg.'), 400);
+		}
+
+		$clean_packages = array();
+		foreach ($packages as $package) {
+			$clean_packages[] = array(
+				'name' => isset($package['name']) ? sanitize_text_field($package['name']) : '',
+				'description' => isset($package['description']) ? sanitize_text_field($package['description']) : '',
+				'weight' => isset($package['weight']) ? (float) $package['weight'] : 0,
+				'length' => isset($package['length']) ? (float) $package['length'] : 0,
+				'width' => isset($package['width']) ? (float) $package['width'] : 0,
+				'height' => isset($package['height']) ? (float) $package['height'] : 0,
+			);
+		}
+
+		$recipient = array(
+			'name' => trim($order->get_shipping_first_name() . ' ' . $order->get_shipping_last_name()),
+			'address_1' => $order->get_shipping_address_1(),
+			'address_2' => $order->get_shipping_address_2(),
+			'postcode' => $order->get_shipping_postcode(),
+			'city' => $order->get_shipping_city(),
+			'country' => $order->get_shipping_country(),
+		);
+
+		if ($recipient['name'] === '') {
+			$recipient['name'] = trim($order->get_billing_first_name() . ' ' . $order->get_billing_last_name());
+		}
+
+		$results = array();
+		foreach ($methods as $method) {
+			$method_payload = array(
+				'agreement_id' => isset($method['agreement_id']) ? sanitize_text_field($method['agreement_id']) : '',
+				'agreement_name' => isset($method['agreement_name']) ? sanitize_text_field($method['agreement_name']) : '',
+				'product_id' => isset($method['product_id']) ? sanitize_text_field($method['product_id']) : '',
+				'product_name' => isset($method['product_name']) ? sanitize_text_field($method['product_name']) : '',
+			);
+
+			$xml = $this->build_estimate_request_xml(array(
+				'recipient' => $recipient,
+				'packages' => $clean_packages,
+			), $method_payload);
+
+			$response = wp_remote_post('https://api.cargonizer.no/consignments/estimated_prices.xml', array(
+				'timeout' => 40,
+				'headers' => array_merge($this->get_auth_headers(), array('Content-Type' => 'application/xml')),
+				'body' => $xml,
+			));
+
+			$item = array(
+				'method_name' => trim($method_payload['agreement_name'] . ' - ' . $method_payload['product_name']),
+				'agreement_id' => $method_payload['agreement_id'],
+				'product_id' => $method_payload['product_id'],
+				'estimated_price' => '',
+				'status' => 'failed',
+				'error' => '',
+			);
+
+			if (is_wp_error($response)) {
+				$item['error'] = $response->get_error_message();
+				$results[] = $item;
+				continue;
+			}
+
+			$status = wp_remote_retrieve_response_code($response);
+			$body = wp_remote_retrieve_body($response);
+
+			if ($status < 200 || $status >= 300) {
+				$item['error'] = 'HTTP ' . $status;
+				$results[] = $item;
+				continue;
+			}
+
+			$item['estimated_price'] = $this->parse_estimated_price($body);
+			$item['status'] = $item['estimated_price'] !== '' ? 'ok' : 'unknown';
+			if ($item['status'] === 'unknown') {
+				$item['error'] = 'Fikk svar, men fant ikke estimert prisfelt i responsen.';
+			}
+
+			$results[] = $item;
+		}
+
+		wp_send_json_success(array('results' => $results));
 	}
 
 	public function render_admin_page() {
