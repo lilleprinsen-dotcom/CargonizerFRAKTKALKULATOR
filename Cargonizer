@@ -1111,9 +1111,12 @@ class LP_Cargonizer_Connector {
 					'price_source_fallback_reason: ' + (row.price_source_fallback_reason || '—'),
 					'rounding_mode: ' + (row.rounding_mode || '—'),
 					'base_price: ' + (row.base_price || '—'),
+					'discount_percent: ' + (row.discount_percent || '—'),
+					'discounted_base: ' + (row.discounted_base || '—'),
 					'fuel_surcharge: ' + (row.fuel_surcharge || '—'),
 					'toll_surcharge: ' + (row.toll_surcharge || '—'),
 					'handling_fee: ' + (row.handling_fee || '—'),
+					'subtotal_ex_vat: ' + (row.subtotal_ex_vat || row.adjusted_price || '—'),
 					'vat_percent: ' + (row.vat_percent || '—'),
 					'price_incl_vat: ' + (row.price_incl_vat || '—'),
 					'rounded_price: ' + (row.rounded_price || '—'),
@@ -1343,9 +1346,12 @@ class LP_Cargonizer_Connector {
 						'<div><strong>Agreement ID:</strong> '+esc(row.agreement_id || '—')+'</div>' +
 						'<div><strong>Produkt:</strong> '+esc(row.product_id || '—')+'</div>';
 					var basePriceText = row.base_price !== '' && row.base_price !== undefined ? row.base_price : (row.selected_price_value || row.original_price || row.estimated_price || '—');
+					var discountPercentText = row.discount_percent !== '' && row.discount_percent !== undefined ? row.discount_percent : '—';
+					var discountedBaseText = row.discounted_base !== '' && row.discounted_base !== undefined ? row.discounted_base : '—';
 					var fuelSurchargeText = row.fuel_surcharge !== '' && row.fuel_surcharge !== undefined ? row.fuel_surcharge : '—';
 					var tollSurchargeText = row.toll_surcharge !== '' && row.toll_surcharge !== undefined ? row.toll_surcharge : '—';
 					var handlingFeeText = row.handling_fee !== '' && row.handling_fee !== undefined ? row.handling_fee : '—';
+					var subtotalExVatText = row.subtotal_ex_vat !== '' && row.subtotal_ex_vat !== undefined ? row.subtotal_ex_vat : (row.adjusted_price || '—');
 					var inclVatText = row.price_incl_vat !== '' && row.price_incl_vat !== undefined ? row.price_incl_vat : '—';
 					var roundedText = row.rounded_price !== '' && row.rounded_price !== undefined ? row.rounded_price : '—';
 					var finalExVatText = row.final_price_ex_vat !== '' && row.final_price_ex_vat !== undefined ? row.final_price_ex_vat : (row.discounted_price || '—');
@@ -1360,9 +1366,12 @@ class LP_Cargonizer_Connector {
 						'<td>'+compactIdHtml+'</td>' +
 						'<td>'+esc(priceFieldText)+'</td>' +
 						'<td>'+esc(basePriceText)+'</td>' +
+						'<td>'+esc(discountPercentText)+'</td>' +
+						'<td>'+esc(discountedBaseText)+'</td>' +
 						'<td>'+esc(fuelSurchargeText)+'</td>' +
 						'<td>'+esc(tollSurchargeText)+'</td>' +
 						'<td>'+esc(handlingFeeText)+'</td>' +
+						'<td>'+esc(subtotalExVatText)+'</td>' +
 						'<td>'+esc(inclVatText)+'</td>' +
 						'<td>'+esc(roundedText)+'</td>' +
 						'<td>'+esc(finalExVatText)+'</td>' +
@@ -1370,7 +1379,7 @@ class LP_Cargonizer_Connector {
 						'<td>'+renderServicepartnerControls(row)+'</td>' +
 					'</tr>';
 				}).join('');
-				resultsContent.innerHTML = '<table class="widefat striped"><thead><tr><th>Fraktmetode / produkt</th><th>Transportør / provider</th><th>ID</th><th>Prisfelt brukt</th><th>Grunnpris</th><th>Drivstofftillegg</th><th>Bomtillegg</th><th>Håndteringsgebyr</th><th>Pris inkl. mva</th><th>Avrundet pris</th><th>Sluttpris eks. mva</th><th>Status</th><th>Melding</th></tr></thead><tbody>'+rows+'</tbody></table>';
+				resultsContent.innerHTML = '<table class="widefat striped"><thead><tr><th>Fraktmetode / produkt</th><th>Transportør / provider</th><th>ID</th><th>Prisfelt brukt</th><th>Grunnpris</th><th>Rabatt %</th><th>Rabattert grunnpris</th><th>Drivstofftillegg</th><th>Bomtillegg</th><th>Håndteringsgebyr</th><th>Subtotal eks. mva</th><th>Pris inkl. mva</th><th>Avrundet pris</th><th>Sluttpris eks. mva</th><th>Status</th><th>Melding</th></tr></thead><tbody>'+rows+'</tbody></table>';
 			}
 
 			function fetchShippingOptions(){
@@ -2231,6 +2240,12 @@ class LP_Cargonizer_Connector {
 			'status' => 'unknown',
 			'error' => '',
 			'base_price' => '',
+			'discount_percent' => '',
+			'discounted_base' => '',
+			'fuel_surcharge' => '',
+			'toll_surcharge' => '',
+			'handling_fee' => '',
+			'subtotal_ex_vat' => '',
 			'adjusted_price' => '',
 			'price_incl_vat' => '',
 			'rounded_price' => '',
@@ -2252,19 +2267,28 @@ class LP_Cargonizer_Connector {
 			return $result;
 		}
 
-		$fixed_addition = isset($pricing_config['fixed_addition']) ? (float) $pricing_config['fixed_addition'] : 0;
-		$percentage_addition = isset($pricing_config['percentage_addition']) ? (float) $pricing_config['percentage_addition'] : 0;
+		$discount_percent = isset($pricing_config['discount_percent']) ? $this->sanitize_discount_percent($pricing_config['discount_percent']) : 0;
+		$fuel_surcharge = isset($pricing_config['fuel_surcharge']) ? $this->sanitize_non_negative_number($pricing_config['fuel_surcharge']) : 0;
+		$toll_surcharge = isset($pricing_config['toll_surcharge']) ? $this->sanitize_non_negative_number($pricing_config['toll_surcharge']) : 0;
+		$handling_fee = isset($pricing_config['handling_fee']) ? $this->sanitize_non_negative_number($pricing_config['handling_fee']) : 0;
 		$vat_percent = isset($pricing_config['vat_percent']) ? (float) $pricing_config['vat_percent'] : 0;
 		$rounding_mode = isset($pricing_config['rounding_mode']) ? $this->sanitize_rounding_mode($pricing_config['rounding_mode']) : 'none';
 
-		$adjusted_price = $base_price + $fixed_addition + ($base_price * $percentage_addition / 100);
-		$price_incl_vat = $adjusted_price * (1 + ($vat_percent / 100));
+		$discounted_base = $base_price - ($base_price * $discount_percent / 100);
+		$subtotal_ex_vat = $discounted_base + $fuel_surcharge + $toll_surcharge + $handling_fee;
+		$price_incl_vat = $subtotal_ex_vat * (1 + ($vat_percent / 100));
 		$rounded_price = $this->apply_rounding_mode($price_incl_vat, $rounding_mode);
 		$final_price_ex_vat = $vat_percent > 0 ? ($rounded_price / (1 + ($vat_percent / 100))) : $rounded_price;
 
 		$result['status'] = 'ok';
 		$result['base_price'] = number_format($base_price, 2, '.', '');
-		$result['adjusted_price'] = number_format($adjusted_price, 2, '.', '');
+		$result['discount_percent'] = number_format($discount_percent, 2, '.', '');
+		$result['discounted_base'] = number_format($discounted_base, 2, '.', '');
+		$result['fuel_surcharge'] = number_format($fuel_surcharge, 2, '.', '');
+		$result['toll_surcharge'] = number_format($toll_surcharge, 2, '.', '');
+		$result['handling_fee'] = number_format($handling_fee, 2, '.', '');
+		$result['subtotal_ex_vat'] = number_format($subtotal_ex_vat, 2, '.', '');
+		$result['adjusted_price'] = $result['subtotal_ex_vat'];
 		$result['price_incl_vat'] = number_format($price_incl_vat, 2, '.', '');
 		$result['rounded_price'] = number_format($rounded_price, 2, '.', '');
 		$result['final_price_ex_vat'] = number_format($final_price_ex_vat, 2, '.', '');
@@ -2432,6 +2456,7 @@ class LP_Cargonizer_Connector {
 				'rounding_mode' => isset($pricing_config['rounding_mode']) ? $pricing_config['rounding_mode'] : 'none',
 				'base_price' => '',
 				'adjusted_price' => '',
+				'subtotal_ex_vat' => '',
 				'price_incl_vat' => '',
 				'rounded_price' => '',
 				'final_price_ex_vat' => '',
@@ -2545,7 +2570,13 @@ class LP_Cargonizer_Connector {
 				}
 			} else {
 				$item['base_price'] = $calculated['base_price'];
+				$item['discount_percent'] = $calculated['discount_percent'];
+				$item['discounted_base'] = $calculated['discounted_base'];
+				$item['fuel_surcharge'] = $calculated['fuel_surcharge'];
+				$item['toll_surcharge'] = $calculated['toll_surcharge'];
+				$item['handling_fee'] = $calculated['handling_fee'];
 				$item['adjusted_price'] = $calculated['adjusted_price'];
+				$item['subtotal_ex_vat'] = $calculated['subtotal_ex_vat'];
 				$item['price_incl_vat'] = $calculated['price_incl_vat'];
 				$item['rounded_price'] = $calculated['rounded_price'];
 				$item['final_price_ex_vat'] = $calculated['final_price_ex_vat'];
@@ -2555,7 +2586,7 @@ class LP_Cargonizer_Connector {
 				$item['fuel_amount'] = number_format($fixed_addition, 2, '.', '');
 				$item['toll_amount'] = number_format(0, 2, '.', '');
 				$item['discount_basis'] = $calculated['base_price'];
-				$item['discounted_base'] = $calculated['adjusted_price'];
+				$item['discounted_base'] = $calculated['discounted_base'];
 				$item['negative_base_clamped'] = false;
 				$item['discounted_price'] = $calculated['final_price_ex_vat'];
 				$item['legacy_fields'] = array(
