@@ -1168,7 +1168,7 @@ class LP_Cargonizer_Connector {
 		if (
 			isset($_POST['lp_cargonizer_refresh_method_choices'])
 			&& isset($_POST['_wpnonce'])
-			&& wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['_wpnonce'])), self::NONCE_ACTION_FETCH)
+			&& wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['_wpnonce'])), self::NONCE_ACTION_SAVE)
 		) {
 			$method_refresh = $this->fetch_transport_agreements();
 			if ($method_refresh['success']) {
@@ -1279,7 +1279,7 @@ class LP_Cargonizer_Connector {
 
 					<p>
 						<button type="submit" name="lp_cargonizer_save_settings" class="button button-primary">
-							Lagre autentisering
+							Lagre innstillinger
 						</button>
 					</p>
 				</form>
