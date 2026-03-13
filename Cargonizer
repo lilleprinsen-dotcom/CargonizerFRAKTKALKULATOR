@@ -869,12 +869,19 @@ class LP_Cargonizer_Connector {
 			wp_send_json_error(array('message' => 'Ugyldig nonce.'), 403);
 		}
 
-		$result = $this->fetch_transport_agreements();
-		if (!$result['success']) {
-			wp_send_json_error(array('message' => $result['message']), 400);
+		$settings = $this->get_settings();
+		$options = isset($settings['available_methods']) && is_array($settings['available_methods']) ? $settings['available_methods'] : array();
+
+		// Fallback for eldre lagrede innstillinger som ikke har lastet metodekatalog enda.
+		if (empty($options)) {
+			$result = $this->fetch_transport_agreements();
+			if (!$result['success']) {
+				wp_send_json_error(array('message' => $result['message']), 400);
+			}
+
+			$options = $this->flatten_shipping_methods($result['data']);
 		}
 
-		$options = $this->flatten_shipping_methods($result['data']);
 		$allowed_options = $this->filter_options_by_enabled_methods($options);
 
 		wp_send_json_success(array('options' => $allowed_options));
