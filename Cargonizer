@@ -942,7 +942,7 @@ class LP_Cargonizer_Connector {
 			}
 
 			function renderEstimateDebug(row){
-				if (!row || row.status === 'ok') { return ''; }
+				if (!row) { return ''; }
 				var summary = row.request_summary || {};
 				var packages = Array.isArray(summary.packages) ? summary.packages : [];
 				var packageText = packages.map(function(pkg, idx){
@@ -950,12 +950,25 @@ class LP_Cargonizer_Connector {
 						'w=' + (pkg.weight || 0) + 'kg, ' +
 						'LxBxH=' + (pkg.length || 0) + 'x' + (pkg.width || 0) + 'x' + (pkg.height || 0) + 'cm';
 				}).join(' | ');
+				var source = row.selected_price_source || 'ingen';
+				var selectedValue = row.selected_price_value || '—';
+				var alternatives = [];
+				if (row.net_amount) { alternatives.push('net_amount=' + row.net_amount); }
+				if (row.gross_amount) { alternatives.push('gross_amount=' + row.gross_amount); }
+				if (row.estimated_cost) { alternatives.push('estimated_cost=' + row.estimated_cost); }
+				if (row.fallback_price) { alternatives.push('fallback_price=' + row.fallback_price); }
 				var fields = [
 					'HTTP: ' + (row.http_status || '—'),
 					'Error code: ' + (row.error_code || '—'),
 					'Error type: ' + (row.error_type || '—'),
 					'Melding: ' + (row.parsed_error_message || row.error || '—'),
 					'Detaljer: ' + (row.error_details || '—'),
+					'Prisfelt brukt: ' + source + ' = ' + selectedValue,
+					'Alternative prisfelt i respons: ' + (alternatives.length ? alternatives.join(', ') : 'ingen'),
+					'estimated_cost: ' + (row.estimated_cost || '—'),
+					'gross_amount: ' + (row.gross_amount || '—'),
+					'net_amount: ' + (row.net_amount || '—'),
+					'fallback_price: ' + (row.fallback_price || '—'),
 					'Agreement: ' + (summary.agreement_id || row.agreement_id || '—'),
 					'Produkt: ' + (summary.product_id || row.product_id || '—'),
 					'Kolli: ' + (summary.number_of_packages !== undefined ? summary.number_of_packages : '—'),
@@ -964,6 +977,9 @@ class LP_Cargonizer_Connector {
 					'Pakker: ' + (packageText || '—')
 				];
 				var rawXml = shortRaw(row.raw_response || '', 1200);
+				if (!rawXml && !alternatives.length && !row.selected_price_source && !row.parsed_error_message && !row.error) {
+					return '';
+				}
 				return '<details style="margin-top:6px;"><summary>Debug</summary><div style="margin-top:4px;color:#646970;">'+esc(fields.join(' | '))+'</div>' +
 					(rawXml ? '<pre style="white-space:pre-wrap;max-height:160px;overflow:auto;background:#f6f7f7;padding:8px;border:1px solid #dcdcde;margin-top:6px;">'+esc(rawXml)+'</pre>' : '') +
 					'</details>';
@@ -1185,7 +1201,7 @@ class LP_Cargonizer_Connector {
 					'<td>'+esc(row.method_name || 'Ukjent metode')+'</td>' +
 					'<td>'+esc((row.carrier_name || '—') + (row.carrier_id ? ' (' + row.carrier_id + ')' : ''))+'</td>' +
 					'<td>'+compactIdHtml+'</td>' +
-					'<td>'+esc(row.original_price || row.estimated_price || '—')+'</td>' +
+					'<td>'+esc(row.selected_price_value || row.original_price || row.estimated_price || '—')+'</td>' +
 					'<td>'+esc((row.discount_percent !== undefined ? row.discount_percent : 0) + '%')+'</td>' +
 					'<td>'+esc(fuelText)+'</td>' +
 					'<td>'+esc(tollText)+'</td>' +
@@ -1932,39 +1948,94 @@ class LP_Cargonizer_Connector {
 		return '';
 	}
 
-	private function parse_estimated_price($body) {
+	private function parse_estimate_price_fields($body) {
+		$fields = array(
+			'estimated_cost' => '',
+			'gross_amount' => '',
+			'net_amount' => '',
+			'fallback_price' => '',
+		);
+
 		if (empty($body)) {
-			return '';
+			return $fields;
 		}
 
 		libxml_use_internal_errors(true);
 		$xml = simplexml_load_string($body);
 		if ($xml === false) {
 			libxml_clear_errors();
-			return '';
+			return $fields;
 		}
 
-		$paths = array(
-			'//estimated-cost',
-			'//gross-amount',
-			'//net-amount',
-			'//estimated_price',
-			'//price',
-			'//amount',
-			'//total',
+		$primary_paths = array(
+			'estimated_cost' => array('//estimated-cost'),
+			'gross_amount' => array('//gross-amount'),
+			'net_amount' => array('//net-amount'),
 		);
 
-		foreach ($paths as $path) {
-			$found = $xml->xpath($path);
-			if (!empty($found)) {
-				$value = trim((string) $found[0]);
-				if ($value !== '') {
-					return $value;
+		foreach ($primary_paths as $key => $paths) {
+			foreach ($paths as $path) {
+				$found = $xml->xpath($path);
+				if (!empty($found)) {
+					$value = trim((string) $found[0]);
+					if ($value !== '') {
+						$fields[$key] = $value;
+						break;
+					}
 				}
 			}
 		}
 
-		return '';
+		if ($fields['estimated_cost'] === '' && $fields['gross_amount'] === '' && $fields['net_amount'] === '') {
+			$fallback_paths = array(
+				'//estimated_price',
+				'//price',
+				'//amount',
+				'//total',
+			);
+
+			foreach ($fallback_paths as $path) {
+				$found = $xml->xpath($path);
+				if (!empty($found)) {
+					$value = trim((string) $found[0]);
+					if ($value !== '') {
+						$fields['fallback_price'] = $value;
+						break;
+					}
+				}
+			}
+		}
+
+		return $fields;
+	}
+
+	private function select_estimate_price_value($price_fields) {
+		$selected = array(
+			'source' => '',
+			'value' => '',
+		);
+
+		if (!is_array($price_fields)) {
+			return $selected;
+		}
+
+		$priority = array('net_amount', 'gross_amount', 'estimated_cost', 'fallback_price');
+		foreach ($priority as $source) {
+			$value = isset($price_fields[$source]) ? trim((string) $price_fields[$source]) : '';
+			if ($value !== '') {
+				$selected['source'] = $source;
+				$selected['value'] = $value;
+				return $selected;
+			}
+		}
+
+		return $selected;
+	}
+
+	private function parse_estimated_price($body) {
+		$price_fields = $this->parse_estimate_price_fields($body);
+		$selected = $this->select_estimate_price_value($price_fields);
+		return $selected['value'];
 	}
 
 	public function ajax_run_bulk_estimate() {
@@ -2086,6 +2157,12 @@ class LP_Cargonizer_Connector {
 				'servicepartner_options' => array(),
 				'servicepartner_fetch' => array(),
 				'estimated_price' => '',
+				'estimated_cost' => '',
+				'gross_amount' => '',
+				'net_amount' => '',
+				'fallback_price' => '',
+				'selected_price_source' => '',
+				'selected_price_value' => '',
 				'original_price' => '',
 				'discount_percent' => $discount_percent,
 				'fuel_type' => isset($pricing_config['fuel_type']) ? $pricing_config['fuel_type'] : 'fixed',
@@ -2179,17 +2256,25 @@ class LP_Cargonizer_Connector {
 				continue;
 			}
 
-			$item['estimated_price'] = $this->parse_estimated_price($body);
-			$item['original_price'] = $item['estimated_price'];
-			$item['status'] = $item['estimated_price'] !== '' ? 'ok' : 'unknown';
+			$price_fields = $this->parse_estimate_price_fields($body);
+			$item['estimated_cost'] = $price_fields['estimated_cost'];
+			$item['gross_amount'] = $price_fields['gross_amount'];
+			$item['net_amount'] = $price_fields['net_amount'];
+			$item['fallback_price'] = $price_fields['fallback_price'];
+			$selected_price = $this->select_estimate_price_value($price_fields);
+			$item['selected_price_source'] = $selected_price['source'];
+			$item['selected_price_value'] = $selected_price['value'];
+			$item['estimated_price'] = $selected_price['value'];
+			$item['original_price'] = $selected_price['value'];
+			$item['status'] = $selected_price['value'] !== '' ? 'ok' : 'unknown';
 			if ($item['status'] === 'unknown') {
-				$item['error'] = 'Fikk svar, men fant ikke estimert prisfelt i responsen.';
+				$item['error'] = 'Fikk svar, men fant ingen prisfelt (net_amount, gross_amount, estimated_cost eller fallback_price) i responsen.';
 				$item['parsed_error_message'] = $this->parse_response_error_message($body);
 			} else {
-				$parsed_original_price = $this->parse_price_to_number($item['estimated_price']);
+				$parsed_original_price = $this->parse_price_to_number($selected_price['value']);
 				if ($parsed_original_price === null) {
 					$item['status'] = 'price_parse_failed';
-					$item['error'] = 'Kunne ikke tolke estimert pris som et tall. Viser kun original respons.';
+					$item['error'] = 'Kunne ikke tolke valgt prisfelt (' . $selected_price['source'] . ') som et tall. Viser kun original respons.';
 				} else {
 					$fuel_amount = $this->calculate_adjustment_amount($parsed_original_price, $item['fuel_type'], $item['fuel_value']);
 					$toll_max = $item['toll_type'] === 'percent' ? $item['toll_percent_max'] : null;
