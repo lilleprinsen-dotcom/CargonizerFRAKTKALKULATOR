@@ -21,7 +21,7 @@ class LP_Cargonizer_Connector {
 	public function __construct() {
 		add_action('admin_menu', array($this, 'add_admin_menu'), 99);
 		add_action('admin_init', array($this, 'register_settings'));
-		add_action('woocommerce_admin_order_actions_end', array($this, 'render_order_estimate_button'));
+		add_action('woocommerce_admin_order_data_after_order_details', array($this, 'render_order_estimate_button'));
 		add_action('admin_footer', array($this, 'render_estimate_modal'));
 		add_action('wp_ajax_lp_cargonizer_get_order_estimate_data', array($this, 'ajax_get_order_estimate_data'));
 		add_action('wp_ajax_lp_cargonizer_get_shipping_options', array($this, 'ajax_get_shipping_options'));
@@ -262,7 +262,7 @@ class LP_Cargonizer_Connector {
 			return;
 		}
 
-		echo '<button type="button" class="button button-small lp-cargonizer-estimate-open" data-order-id="' . esc_attr($order->get_id()) . '" style="margin-left:6px;">Estimer fraktkostnad</button>';
+		echo '<p style="margin-top:12px;"><button type="button" class="button lp-cargonizer-estimate-open" data-order-id="' . esc_attr($order->get_id()) . '">Estimer fraktkostnad</button></p>';
 	}
 
 	public function render_estimate_modal() {
