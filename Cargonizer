@@ -162,14 +162,7 @@ class LP_Cargonizer_Connector {
 				'fuel_surcharge' => $fuel_surcharge,
 				'toll_surcharge' => $toll_surcharge,
 				'handling_fee' => $handling_fee,
-				'fuel_type' => $this->sanitize_adjustment_type(isset($pricing['fuel_type']) ? $pricing['fuel_type'] : 'fixed'),
-				'fuel_value' => $this->sanitize_non_negative_number(isset($pricing['fuel_value']) ? $pricing['fuel_value'] : 0),
-				'toll_type' => $this->sanitize_adjustment_type(isset($pricing['toll_type']) ? $pricing['toll_type'] : 'fixed'),
-				'toll_value' => $this->sanitize_non_negative_number(isset($pricing['toll_value']) ? $pricing['toll_value'] : 0),
-				'toll_percent_max' => $this->sanitize_non_negative_number(isset($pricing['toll_percent_max']) ? $pricing['toll_percent_max'] : 0),
 				'price_source' => $this->sanitize_price_source(isset($pricing['price_source']) ? $pricing['price_source'] : 'estimated'),
-				'fixed_addition' => round($fuel_surcharge + $toll_surcharge + $handling_fee, 2),
-				'percentage_addition' => round(0 - $discount_percent, 2),
 				'vat_percent' => $this->sanitize_non_negative_number(isset($pricing['vat_percent']) ? $pricing['vat_percent'] : 0),
 				'rounding_mode' => $this->sanitize_rounding_mode(isset($pricing['rounding_mode']) ? $pricing['rounding_mode'] : 'none'),
 			);
@@ -182,14 +175,7 @@ class LP_Cargonizer_Connector {
 					'fuel_surcharge' => 0,
 					'toll_surcharge' => 0,
 					'handling_fee' => 0,
-					'fuel_type' => 'fixed',
-					'fuel_value' => 0,
-					'toll_type' => 'fixed',
-					'toll_value' => 0,
-					'toll_percent_max' => 0,
 					'price_source' => 'estimated',
-					'fixed_addition' => 0,
-					'percentage_addition' => round(0 - $discount_value, 2),
 					'vat_percent' => 0,
 					'rounding_mode' => 'none',
 				);
@@ -469,14 +455,7 @@ class LP_Cargonizer_Connector {
 			'fuel_surcharge' => 0,
 			'toll_surcharge' => 0,
 			'handling_fee' => 0,
-			'fuel_type' => 'fixed',
-			'fuel_value' => 0,
-			'toll_type' => 'fixed',
-			'toll_value' => 0,
-			'toll_percent_max' => 0,
 			'price_source' => 'estimated',
-			'fixed_addition' => 0,
-			'percentage_addition' => 0,
 			'vat_percent' => 0,
 			'rounding_mode' => 'none',
 		);
@@ -493,8 +472,6 @@ class LP_Cargonizer_Connector {
 			$default = $this->get_default_method_pricing();
 			$default['discount_percent'] = isset($discounts[$method_key]) ? $discounts[$method_key] : 0;
 			$raw = isset($pricing_settings[$method_key]) && is_array($pricing_settings[$method_key]) ? $pricing_settings[$method_key] : array();
-			$legacy_mapping_used = false;
-
 			$price_source = isset($raw['price_source'])
 				? $this->sanitize_price_source($raw['price_source'])
 				: 'estimated';
@@ -507,52 +484,15 @@ class LP_Cargonizer_Connector {
 			$handling_fee = isset($raw['handling_fee'])
 				? $this->sanitize_non_negative_number($raw['handling_fee'])
 				: 0;
-			$fixed_addition = 0;
-			$percentage_addition = 0;
-
-			// Bakoverkompatibilitet: map gamle rabatt/drivstoff/bom-felt til ny modell hvis ny ikke finnes.
-			if (!isset($raw['price_source']) && !isset($raw['fixed_addition']) && !isset($raw['percentage_addition'])) {
-				$legacy_mapping_used = true;
-				$legacy_discount = isset($raw['discount_percent']) ? $this->sanitize_discount_percent($raw['discount_percent']) : $default['discount_percent'];
-				$legacy_fuel_type = $this->sanitize_adjustment_type(isset($raw['fuel_type']) ? $raw['fuel_type'] : $default['fuel_type']);
-				$legacy_fuel_value = $this->sanitize_non_negative_number(isset($raw['fuel_value']) ? $raw['fuel_value'] : $default['fuel_value']);
-				$legacy_toll_type = $this->sanitize_adjustment_type(isset($raw['toll_type']) ? $raw['toll_type'] : $default['toll_type']);
-				$legacy_toll_value = $this->sanitize_non_negative_number(isset($raw['toll_value']) ? $raw['toll_value'] : $default['toll_value']);
-				$legacy_toll_max = $this->sanitize_non_negative_number(isset($raw['toll_percent_max']) ? $raw['toll_percent_max'] : $default['toll_percent_max']);
-
-				$percentage_addition = max(0, $legacy_fuel_type === 'percent' ? $legacy_fuel_value : 0)
-					+ max(0, $legacy_toll_type === 'percent' ? min($legacy_toll_value, $legacy_toll_max > 0 ? $legacy_toll_max : $legacy_toll_value) : 0)
-					- $legacy_discount;
-				$fixed_addition = max(0, $legacy_fuel_type === 'fixed' ? $legacy_fuel_value : 0)
-					+ max(0, $legacy_toll_type === 'fixed' ? $legacy_toll_value : 0);
-			}
-
-			if (!isset($raw['fuel_surcharge']) && !isset($raw['toll_surcharge']) && !isset($raw['handling_fee'])) {
-				$fuel_surcharge = $fixed_addition;
-				$toll_surcharge = 0;
-				$handling_fee = 0;
-			}
-
-			$fixed_addition = $fuel_surcharge + $toll_surcharge + $handling_fee;
-			$discount_for_calc = isset($raw['discount_percent']) ? $this->sanitize_discount_percent($raw['discount_percent']) : $default['discount_percent'];
-			$percentage_addition = round(0 - $discount_for_calc, 2);
 
 			$result[$method_key] = array(
 				'discount_percent' => isset($raw['discount_percent']) ? $this->sanitize_discount_percent($raw['discount_percent']) : $default['discount_percent'],
 				'fuel_surcharge' => round($fuel_surcharge, 2),
 				'toll_surcharge' => round($toll_surcharge, 2),
 				'handling_fee' => round($handling_fee, 2),
-				'fuel_type' => $this->sanitize_adjustment_type(isset($raw['fuel_type']) ? $raw['fuel_type'] : $default['fuel_type']),
-				'fuel_value' => $this->sanitize_non_negative_number(isset($raw['fuel_value']) ? $raw['fuel_value'] : $default['fuel_value']),
-				'toll_type' => $this->sanitize_adjustment_type(isset($raw['toll_type']) ? $raw['toll_type'] : $default['toll_type']),
-				'toll_value' => $this->sanitize_non_negative_number(isset($raw['toll_value']) ? $raw['toll_value'] : $default['toll_value']),
-				'toll_percent_max' => $this->sanitize_non_negative_number(isset($raw['toll_percent_max']) ? $raw['toll_percent_max'] : $default['toll_percent_max']),
 				'price_source' => $price_source,
-				'fixed_addition' => round($fixed_addition, 2),
-				'percentage_addition' => round($percentage_addition, 2),
 				'vat_percent' => isset($raw['vat_percent']) ? $this->sanitize_non_negative_number($raw['vat_percent']) : 0,
 				'rounding_mode' => isset($raw['rounding_mode']) ? $this->sanitize_rounding_mode($raw['rounding_mode']) : 'none',
-				'legacy_mapping_used' => $legacy_mapping_used,
 			);
 		}
 
@@ -1125,8 +1065,6 @@ class LP_Cargonizer_Connector {
 					'gross_amount: ' + (row.gross_amount || '—'),
 					'net_amount: ' + (row.net_amount || '—'),
 					'fallback_price: ' + (row.fallback_price || '—'),
-					'legacy_mapping_used: ' + (row.legacy_mapping_used ? 'ja' : 'nei'),
-					'legacy_fields_note: ' + (row.legacy_fields_note || '—'),
 					'Agreement: ' + (summary.agreement_id || row.agreement_id || '—'),
 					'Produkt: ' + (summary.product_id || row.product_id || '—'),
 					'Kolli: ' + (summary.number_of_packages !== undefined ? summary.number_of_packages : '—'),
@@ -2470,11 +2408,6 @@ class LP_Cargonizer_Connector {
 				'fallback_step_used' => 0,
 				'original_price' => '',
 				'discount_percent' => $discount_percent,
-				'fuel_type' => isset($pricing_config['fuel_type']) ? $pricing_config['fuel_type'] : 'fixed',
-				'fuel_value' => isset($pricing_config['fuel_value']) ? $pricing_config['fuel_value'] : 0,
-				'toll_type' => isset($pricing_config['toll_type']) ? $pricing_config['toll_type'] : 'fixed',
-				'toll_value' => isset($pricing_config['toll_value']) ? $pricing_config['toll_value'] : 0,
-				'toll_percent_max' => isset($pricing_config['toll_percent_max']) ? $pricing_config['toll_percent_max'] : 0,
 				'fuel_amount' => '',
 				'toll_amount' => '',
 				'discount_basis' => '',
@@ -2482,12 +2415,8 @@ class LP_Cargonizer_Connector {
 				'negative_base_clamped' => false,
 				'discounted_price' => '',
 				'legacy_fields' => array(),
-				'legacy_fields_note' => 'Legacy-felter beholdes kun for bakoverkompatibilitet mot eksisterende UI. Legacy-konvertering er kun et anslag og ikke eksakt samme matematikk som gammel modell.',
-				'legacy_mapping_used' => !empty($pricing_config['legacy_mapping_used']),
 				'price_source_config' => isset($pricing_config['price_source']) ? $pricing_config['price_source'] : 'estimated',
 				'configured_price_source_key' => '',
-				'fixed_addition' => isset($pricing_config['fixed_addition']) ? $pricing_config['fixed_addition'] : 0,
-				'percentage_addition' => isset($pricing_config['percentage_addition']) ? $pricing_config['percentage_addition'] : 0,
 				'vat_percent' => isset($pricing_config['vat_percent']) ? $pricing_config['vat_percent'] : 0,
 				'rounding_mode' => isset($pricing_config['rounding_mode']) ? $pricing_config['rounding_mode'] : 'none',
 				'base_price' => '',
@@ -2617,9 +2546,9 @@ class LP_Cargonizer_Connector {
 				$item['rounded_price'] = $calculated['rounded_price'];
 				$item['final_price_ex_vat'] = $calculated['final_price_ex_vat'];
 
-				$fixed_addition = (float) $item['fixed_addition'];
 				// Legacy-felter beholdes kun for bakoverkompatibilitet. Ikke del av ny prismodell.
-				$item['fuel_amount'] = number_format($fixed_addition, 2, '.', '');
+				$legacy_fixed_addition = (float) $calculated['fuel_surcharge'] + (float) $calculated['toll_surcharge'] + (float) $calculated['handling_fee'];
+				$item['fuel_amount'] = number_format($legacy_fixed_addition, 2, '.', '');
 				$item['toll_amount'] = number_format(0, 2, '.', '');
 				$item['discount_basis'] = $calculated['base_price'];
 				$item['discounted_base'] = $calculated['discounted_base'];
