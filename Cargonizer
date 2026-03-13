@@ -89,7 +89,25 @@ class LP_Cargonizer_Connector {
 				'product_id' => isset($method['product_id']) ? sanitize_text_field((string) $method['product_id']) : '',
 				'product_name' => isset($method['product_name']) ? sanitize_text_field((string) $method['product_name']) : '',
 				'label' => isset($method['label']) ? sanitize_text_field((string) $method['label']) : '',
+				'services' => array(),
 			);
+
+			if (isset($method['services']) && is_array($method['services'])) {
+				foreach ($method['services'] as $service) {
+					if (!is_array($service)) {
+						continue;
+					}
+					$service_id = isset($service['service_id']) ? sanitize_text_field((string) $service['service_id']) : '';
+					$service_name = isset($service['service_name']) ? sanitize_text_field((string) $service['service_name']) : '';
+					if ($service_id === '' && $service_name === '') {
+						continue;
+					}
+					$clean_method['services'][] = array(
+						'service_id' => $service_id,
+						'service_name' => $service_name,
+					);
+				}
+			}
 
 			$output['available_methods'][] = $clean_method;
 			$available_map[$method_key] = true;
@@ -283,18 +301,19 @@ class LP_Cargonizer_Connector {
 					continue;
 				}
 
-				$options[] = array(
-					'key' => $key,
-					'agreement_id' => $agreement_id,
-					'agreement_name' => $display_agreement_name,
-					'agreement_description' => $agreement_description,
-					'agreement_number' => $agreement_number,
-					'carrier_id' => $carrier_id,
-					'carrier_name' => $carrier_name,
-					'product_id' => $product_id,
-					'product_name' => $product_name,
-					'label' => $this->format_method_label($display_agreement_name, $product_name, $carrier_name),
-				);
+					$options[] = array(
+						'key' => $key,
+						'agreement_id' => $agreement_id,
+						'agreement_name' => $display_agreement_name,
+						'agreement_description' => $agreement_description,
+						'agreement_number' => $agreement_number,
+						'carrier_id' => $carrier_id,
+						'carrier_name' => $carrier_name,
+						'product_id' => $product_id,
+						'product_name' => $product_name,
+						'services' => isset($product['services']) && is_array($product['services']) ? $product['services'] : array(),
+						'label' => $this->format_method_label($display_agreement_name, $product_name, $carrier_name),
+					);
 			}
 		}
 
@@ -739,8 +758,20 @@ class LP_Cargonizer_Connector {
 				var html = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:8px;">';
 				options.forEach(function(option){
 					var label = option.label || ((option.agreement_name || '') + ' - ' + (option.product_name || ''));
+					var smsServiceId = '';
+					var smsServiceName = '';
+					if (Array.isArray(option.services)) {
+						option.services.forEach(function(service){
+							var serviceName = (service && service.service_name) ? String(service.service_name) : '';
+							var lowerServiceName = serviceName.toLowerCase();
+							if (!smsServiceId && (lowerServiceName.indexOf('sms varsling') !== -1 || lowerServiceName.indexOf('sms varsel') !== -1 || lowerServiceName.indexOf('sms notification') !== -1)) {
+								smsServiceId = (service && service.service_id) ? String(service.service_id) : '';
+								smsServiceName = serviceName;
+							}
+						});
+					}
 					html += '<label style="display:flex;gap:8px;align-items:flex-start;padding:8px;border:1px solid #dcdcde;background:#fff;">' +
-						'<input type="checkbox" class="lp-shipping-option" data-agreement-id="'+esc(option.agreement_id || '')+'" data-agreement-name="'+esc(option.agreement_name || '')+'" data-agreement-description="'+esc(option.agreement_description || '')+'" data-agreement-number="'+esc(option.agreement_number || '')+'" data-carrier-id="'+esc(option.carrier_id || '')+'" data-carrier-name="'+esc(option.carrier_name || '')+'" data-product-id="'+esc(option.product_id || '')+'" data-product-name="'+esc(option.product_name || '')+'">' +
+						'<input type="checkbox" class="lp-shipping-option" data-agreement-id="'+esc(option.agreement_id || '')+'" data-agreement-name="'+esc(option.agreement_name || '')+'" data-agreement-description="'+esc(option.agreement_description || '')+'" data-agreement-number="'+esc(option.agreement_number || '')+'" data-carrier-id="'+esc(option.carrier_id || '')+'" data-carrier-name="'+esc(option.carrier_name || '')+'" data-product-id="'+esc(option.product_id || '')+'" data-product-name="'+esc(option.product_name || '')+'" data-sms-service-id="'+esc(smsServiceId)+'" data-sms-service-name="'+esc(smsServiceName)+'">' +
 						'<span><strong>'+esc(label)+'</strong><br><span style="color:#646970;">Transportør: '+esc(option.carrier_name || '—') + (option.carrier_id ? ' (' + esc(option.carrier_id) + ')' : '') + ' / Fraktavtale: ' + esc(option.agreement_description || option.agreement_name || option.agreement_id || '—') + (option.agreement_number ? ' (' + esc(option.agreement_number) + ')' : '') + ' / Agreement ID: '+esc(option.agreement_id || '—')+' / Produkt: '+esc(option.product_id || '—')+'</span></span>' +
 					'</label>';
 				});
@@ -759,7 +790,9 @@ class LP_Cargonizer_Connector {
 						carrier_id: input.getAttribute('data-carrier-id') || '',
 						carrier_name: input.getAttribute('data-carrier-name') || '',
 						product_id: input.getAttribute('data-product-id') || '',
-						product_name: input.getAttribute('data-product-name') || ''
+						product_name: input.getAttribute('data-product-name') || '',
+						sms_service_id: input.getAttribute('data-sms-service-id') || '',
+						sms_service_name: input.getAttribute('data-sms-service-name') || ''
 					});
 				});
 				return selected;
@@ -770,6 +803,13 @@ class LP_Cargonizer_Connector {
 				return (row && row.agreement_id ? row.agreement_id : '') + '|' + (row && row.product_id ? row.product_id : '');
 			}
 
+			function needsSmsService(row){
+				if (!row) { return false; }
+				if (row.requires_sms_service) { return true; }
+				var errorText = (row.error || '').toLowerCase();
+				return errorText.indexOf('sms varsling') !== -1 || errorText.indexOf('sms varsel') !== -1 || errorText.indexOf('sms notification') !== -1 || errorText.indexOf('requires sms') !== -1;
+			}
+
 			function needsServicepartner(row){
 				if (!row) { return false; }
 				if (row.requires_servicepartner) { return true; }
@@ -778,7 +818,9 @@ class LP_Cargonizer_Connector {
 			}
 
 			function renderServicepartnerControls(row){
-				if (!needsServicepartner(row)) {
+				var needsPartner = needsServicepartner(row);
+				var needsSms = needsSmsService(row);
+				if (!needsPartner && !needsSms) {
 					return '<span style="color:'+(row.error ? '#b32d2e' : '#2271b1')+';">'+esc(row.error || 'OK')+'</span>';
 				}
 				var methodKey = methodKeyForRow(row);
@@ -793,18 +835,23 @@ class LP_Cargonizer_Connector {
 						optionsHtml += '<option value="'+esc(value)+'" '+(currentValue === value ? 'selected' : '')+'>'+esc(label)+'</option>';
 					});
 				}
-				var infoText = 'Denne metoden krever servicepartner. Velg servicepartner og prøv igjen.';
-				if (!options.length) {
-					infoText += ' Ingen valg lastet enda.';
+				var infoParts = [];
+				if (needsPartner) {
+					var infoText = 'Denne metoden krever servicepartner. Velg servicepartner og prøv igjen.';
+					if (!options.length) { infoText += ' Ingen valg lastet enda.'; }
+					infoParts.push('<div style="color:#b32d2e;">'+esc(infoText)+'</div>');
+				}
+				if (needsSms) {
+					var smsMissing = row.sms_service_missing;
+					var smsInfo = smsMissing ? (row.sms_service_error || 'SMS Varsling ble krevd, men tjenesten ble ikke funnet i transport_agreements for dette produktet.') : 'Denne metoden krever SMS Varsling. Kryss av og prøv igjen.';
+					infoParts.push('<label style="display:flex;gap:6px;align-items:center;"><input type="checkbox" class="lp-sms-service-toggle" data-method-key="'+esc(methodKey)+'" '+((row.use_sms_service && !smsMissing) ? 'checked' : '')+' '+(smsMissing ? 'disabled' : '')+'>Bruk SMS Varsling'+(row.sms_service_name ? ' ('+esc(row.sms_service_name)+')' : '')+'</label>');
+					infoParts.push('<div style="color:'+(smsMissing ? '#b32d2e' : '#646970')+';">'+esc(smsInfo)+'</div>');
 				}
 				return '' +
 					'<div style="display:flex;flex-direction:column;gap:6px;">' +
-						'<div style="color:#b32d2e;">'+esc(infoText)+'</div>' +
-						'<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">' +
-							'<select class="lp-servicepartner-select" data-method-key="'+esc(methodKey)+'" style="min-width:220px;">'+optionsHtml+'</select>' +
-							'<button type="button" class="button button-small lp-servicepartner-refresh" data-method-key="'+esc(methodKey)+'">Hent servicepartnere</button>' +
-							'<button type="button" class="button button-primary button-small lp-servicepartner-retry" data-method-key="'+esc(methodKey)+'">Prøv igjen</button>' +
-						'</div>' +
+						infoParts.join('') +
+						(needsPartner ? '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;"><select class="lp-servicepartner-select" data-method-key="'+esc(methodKey)+'" style="min-width:220px;">'+optionsHtml+'</select><button type="button" class="button button-small lp-servicepartner-refresh" data-method-key="'+esc(methodKey)+'">Hent servicepartnere</button></div>' : '') +
+						'<button type="button" class="button button-primary button-small lp-method-retry" data-method-key="'+esc(methodKey)+'">Prøv igjen</button>' +
 						(row.error ? '<div style="color:#646970;">Siste feil: '+esc(row.error)+'</div>' : '') +
 					'</div>';
 			}
@@ -841,11 +888,13 @@ class LP_Cargonizer_Connector {
 							agreement_name: latestEstimateResults[j].agreement_name || '',
 							agreement_description: latestEstimateResults[j].agreement_description || '',
 							agreement_number: latestEstimateResults[j].agreement_number || '',
-							carrier_id: latestEstimateResults[j].carrier_id || '',
-							carrier_name: latestEstimateResults[j].carrier_name || '',
-							product_id: latestEstimateResults[j].product_id || '',
-							product_name: latestEstimateResults[j].product_name || ''
-						};
+								carrier_id: latestEstimateResults[j].carrier_id || '',
+								carrier_name: latestEstimateResults[j].carrier_name || '',
+								product_id: latestEstimateResults[j].product_id || '',
+								product_name: latestEstimateResults[j].product_name || '',
+								sms_service_id: latestEstimateResults[j].sms_service_id || '',
+								sms_service_name: latestEstimateResults[j].sms_service_name || ''
+							};
 					}
 				}
 				return null;
@@ -877,7 +926,7 @@ class LP_Cargonizer_Connector {
 					.catch(function(){ return []; });
 			}
 
-			function runEstimateForSingleMethod(methodKey, selectedServicepartner){
+			function runEstimateForSingleMethod(methodKey, selectedServicepartner, useSmsService){
 				var colli = collectColliData();
 				if (!colli.isValid || !colli.payload.packages || !colli.payload.packages.length) { return; }
 				var methodData = getMethodDataByKey(methodKey);
@@ -892,6 +941,9 @@ class LP_Cargonizer_Connector {
 				Object.keys(methodData).forEach(function(key){ form.append('methods[0]['+key+']', methodData[key]); });
 				if (selectedServicepartner) {
 					form.append('methods[0][servicepartner]', selectedServicepartner);
+				}
+				if (useSmsService) {
+					form.append('methods[0][use_sms_service]', '1');
 				}
 				fetch(ajaxurl, { method:'POST', credentials:'same-origin', body: form })
 					.then(function(res){ return res.json(); })
@@ -917,10 +969,13 @@ class LP_Cargonizer_Connector {
 					if (row.agreement_number) {
 						agreementText += ' (' + row.agreement_number + ')';
 					}
+					var compactIdHtml = '<div><strong>Fraktavtale:</strong> '+esc(agreementText || '—')+'</div>' +
+						'<div><strong>Agreement ID:</strong> '+esc(row.agreement_id || '—')+'</div>' +
+						'<div><strong>Produkt:</strong> '+esc(row.product_id || '—')+'</div>';
 					return '<tr>' +
 						'<td>'+esc(row.method_name || 'Ukjent metode')+'</td>' +
 						'<td>'+esc((row.carrier_name || '—') + (row.carrier_id ? ' (' + row.carrier_id + ')' : ''))+'</td>' +
-						'<td>'+esc(agreementText + ' / ' + (row.agreement_id || '—') + (row.product_id ? ' / ' + row.product_id : ''))+'</td>' +
+						'<td>'+compactIdHtml+'</td>' +
 						'<td>'+esc(row.original_price || row.estimated_price || '—')+'</td>' +
 						'<td>'+esc((row.discount_percent !== undefined ? row.discount_percent : 0) + '%')+'</td>' +
 						'<td>'+esc(row.discounted_price || '—')+'</td>' +
@@ -1031,17 +1086,31 @@ class LP_Cargonizer_Connector {
 					fetchServicepartnersForMethod(refreshBtn.getAttribute('data-method-key') || '');
 					return;
 				}
-				var retryBtn = e.target.closest('.lp-servicepartner-retry');
+				var retryBtn = e.target.closest('.lp-method-retry');
 				if (retryBtn) {
 					e.preventDefault();
 					var methodKey = retryBtn.getAttribute('data-method-key') || '';
 					var select = resultsContent.querySelector('.lp-servicepartner-select[data-method-key="'+methodKey+'"]');
 					var selectedServicepartner = select ? (select.value || '') : '';
-					runEstimateForSingleMethod(methodKey, selectedServicepartner);
+					var smsToggle = resultsContent.querySelector('.lp-sms-service-toggle[data-method-key="'+methodKey+'"]');
+					var useSmsService = smsToggle ? !!smsToggle.checked : false;
+					runEstimateForSingleMethod(methodKey, selectedServicepartner, useSmsService);
 				}
 			});
 
 			resultsContent.addEventListener('change', function(e){
+				var smsToggle = e.target.closest('.lp-sms-service-toggle');
+				if (smsToggle) {
+					var smsMethodKey = smsToggle.getAttribute('data-method-key') || '';
+					latestEstimateResults = latestEstimateResults.map(function(row){
+						if (methodKeyForRow(row) === smsMethodKey) {
+							row.use_sms_service = !!smsToggle.checked;
+						}
+						return row;
+					});
+					return;
+				}
+
 				var select = e.target.closest('.lp-servicepartner-select');
 				if (!select) { return; }
 				var methodKey = select.getAttribute('data-method-key') || '';
@@ -1236,6 +1305,8 @@ class LP_Cargonizer_Connector {
 		$recipient = isset($payload['recipient']) && is_array($payload['recipient']) ? $payload['recipient'] : array();
 		$packages = isset($payload['packages']) && is_array($payload['packages']) ? $payload['packages'] : array();
 		$servicepartner = isset($payload['servicepartner']) ? sanitize_text_field((string) $payload['servicepartner']) : '';
+		$use_sms_service = !empty($payload['use_sms_service']);
+		$sms_service_id = isset($payload['sms_service_id']) ? sanitize_text_field((string) $payload['sms_service_id']) : '';
 		$package_count = count($packages);
 
 		$xml = new SimpleXMLElement('<consignments/>');
@@ -1244,6 +1315,10 @@ class LP_Cargonizer_Connector {
 		$consignment->addChild('product', esc_html(isset($method['product_id']) ? $method['product_id'] : ''));
 		if ($servicepartner !== '') {
 			$consignment->addChild('servicepartner', esc_html($servicepartner));
+		}
+		if ($use_sms_service && $sms_service_id !== '') {
+			$services_node = $consignment->addChild('services');
+			$services_node->addChild('service', esc_html($sms_service_id));
 		}
 		$consignment->addChild('number_of_packages', (string) max(1, $package_count));
 
@@ -1301,6 +1376,52 @@ class LP_Cargonizer_Connector {
 		}
 
 		return false;
+	}
+
+	private function estimate_requires_sms_service($error_message) {
+		$error_message = strtolower(trim((string) $error_message));
+		if ($error_message === '') {
+			return false;
+		}
+
+		$needles = array(
+			'sms varsling',
+			'sms varsel',
+			'sms notification',
+			'service sms',
+			'requires sms',
+		);
+
+		foreach ($needles as $needle) {
+			if (strpos($error_message, $needle) !== false) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	private function find_sms_service_for_method($method) {
+		$services = isset($method['services']) && is_array($method['services']) ? $method['services'] : array();
+		foreach ($services as $service) {
+			if (!is_array($service)) {
+				continue;
+			}
+			$service_id = isset($service['service_id']) ? sanitize_text_field((string) $service['service_id']) : '';
+			$service_name = isset($service['service_name']) ? sanitize_text_field((string) $service['service_name']) : '';
+			$service_name_lc = strtolower($service_name);
+			if ($service_name_lc !== '' && (strpos($service_name_lc, 'sms varsling') !== false || strpos($service_name_lc, 'sms varsel') !== false || strpos($service_name_lc, 'sms notification') !== false)) {
+				return array(
+					'service_id' => $service_id,
+					'service_name' => $service_name,
+				);
+			}
+		}
+
+		return array(
+			'service_id' => '',
+			'service_name' => '',
+		);
 	}
 
 	private function fetch_servicepartner_options($method) {
@@ -1523,17 +1644,27 @@ class LP_Cargonizer_Connector {
 				'product_id' => isset($method['product_id']) ? sanitize_text_field($method['product_id']) : '',
 				'product_name' => isset($method['product_name']) ? sanitize_text_field($method['product_name']) : '',
 				'servicepartner' => isset($method['servicepartner']) ? sanitize_text_field($method['servicepartner']) : '',
+				'use_sms_service' => !empty($method['use_sms_service']),
+				'sms_service_id' => isset($method['sms_service_id']) ? sanitize_text_field($method['sms_service_id']) : '',
+				'sms_service_name' => isset($method['sms_service_name']) ? sanitize_text_field($method['sms_service_name']) : '',
 			);
 			$method_key = implode('|', array($method_payload['agreement_id'], $method_payload['product_id']));
 			if (!isset($enabled_map[$method_key])) {
 				continue;
 			}
 			$has_allowed_methods = true;
+			if ($method_payload['sms_service_id'] === '') {
+				$sms_service = $this->find_sms_service_for_method($method);
+				$method_payload['sms_service_id'] = $sms_service['service_id'];
+				$method_payload['sms_service_name'] = $sms_service['service_name'];
+			}
 
 			$xml = $this->build_estimate_request_xml(array(
 				'recipient' => $recipient,
 				'packages' => $clean_packages,
 				'servicepartner' => $method_payload['servicepartner'],
+				'use_sms_service' => $method_payload['use_sms_service'],
+				'sms_service_id' => $method_payload['sms_service_id'],
 			), $method_payload);
 
 			$response = wp_remote_post('https://api.cargonizer.no/consignment_costs.xml', array(
@@ -1554,6 +1685,12 @@ class LP_Cargonizer_Connector {
 				'carrier_name' => $method_payload['carrier_name'],
 				'product_id' => $method_payload['product_id'],
 				'selected_servicepartner' => $method_payload['servicepartner'],
+				'use_sms_service' => $method_payload['use_sms_service'],
+				'sms_service_id' => $method_payload['sms_service_id'],
+				'sms_service_name' => $method_payload['sms_service_name'],
+				'requires_sms_service' => false,
+				'sms_service_missing' => false,
+				'sms_service_error' => '',
 				'requires_servicepartner' => false,
 				'servicepartner_options' => array(),
 				'estimated_price' => '',
@@ -1584,6 +1721,13 @@ class LP_Cargonizer_Connector {
 				if ($this->estimate_requires_servicepartner($item['error'])) {
 					$item['requires_servicepartner'] = true;
 					$item['servicepartner_options'] = $this->fetch_servicepartner_options($method_payload);
+				}
+				if ($this->estimate_requires_sms_service($item['error'])) {
+					$item['requires_sms_service'] = true;
+					if ($item['sms_service_id'] === '') {
+						$item['sms_service_missing'] = true;
+						$item['sms_service_error'] = 'SMS Varsling ble krevd, men tjenesten ble ikke funnet i transport_agreements for dette produktet.';
+					}
 				}
 				$results[] = $item;
 				continue;
