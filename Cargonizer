@@ -929,15 +929,51 @@ class LP_Cargonizer_Connector {
 			function needsServicepartner(row){
 				if (!row) { return false; }
 				if (row.requires_servicepartner) { return true; }
-				var errorText = (row.error || '').toLowerCase();
-				return errorText.indexOf('servicepartner må angis') !== -1 || errorText.indexOf('servicepartner maa angis') !== -1 || errorText.indexOf('servicepartner must be specified') !== -1;
+				var errorText = ((row.error || '') + ' ' + (row.parsed_error_message || '') + ' ' + (row.error_code || '')).toLowerCase();
+				return errorText.indexOf('servicepartner må angis') !== -1 || errorText.indexOf('servicepartner maa angis') !== -1 || errorText.indexOf('servicepartner must be specified') !== -1 || errorText.indexOf('missing servicepartner') !== -1;
+			}
+
+			function shortRaw(text, maxLen){
+				var value = String(text || '').trim();
+				var max = maxLen || 350;
+				if (!value) { return ''; }
+				return value.length > max ? (value.slice(0, max) + '...') : value;
+			}
+
+			function renderEstimateDebug(row){
+				if (!row || row.status === 'ok') { return ''; }
+				var summary = row.request_summary || {};
+				var packages = Array.isArray(summary.packages) ? summary.packages : [];
+				var packageText = packages.map(function(pkg, idx){
+					return (idx + 1) + ': ' +
+						'w=' + (pkg.weight || 0) + 'kg, ' +
+						'LxBxH=' + (pkg.length || 0) + 'x' + (pkg.width || 0) + 'x' + (pkg.height || 0) + 'cm';
+				}).join(' | ');
+				var fields = [
+					'HTTP: ' + (row.http_status || '—'),
+					'Error code: ' + (row.error_code || '—'),
+					'Error type: ' + (row.error_type || '—'),
+					'Melding: ' + (row.parsed_error_message || row.error || '—'),
+					'Detaljer: ' + (row.error_details || '—'),
+					'Agreement: ' + (summary.agreement_id || row.agreement_id || '—'),
+					'Produkt: ' + (summary.product_id || row.product_id || '—'),
+					'Kolli: ' + (summary.number_of_packages !== undefined ? summary.number_of_packages : '—'),
+					'Servicepartner: ' + (summary.selected_servicepartner || row.selected_servicepartner || '—'),
+					'SMS service valgt: ' + ((summary.use_sms_service || row.use_sms_service) ? 'Ja' : 'Nei'),
+					'Pakker: ' + (packageText || '—')
+				];
+				var rawXml = shortRaw(row.raw_response || '', 1200);
+				return '<details style="margin-top:6px;"><summary>Debug</summary><div style="margin-top:4px;color:#646970;">'+esc(fields.join(' | '))+'</div>' +
+					(rawXml ? '<pre style="white-space:pre-wrap;max-height:160px;overflow:auto;background:#f6f7f7;padding:8px;border:1px solid #dcdcde;margin-top:6px;">'+esc(rawXml)+'</pre>' : '') +
+					'</details>';
 			}
 
 			function renderServicepartnerControls(row){
 				var needsPartner = needsServicepartner(row);
 				var needsSms = needsSmsService(row);
 				if (!needsPartner && !needsSms) {
-					return '<span style="color:'+(row.error ? '#b32d2e' : '#2271b1')+';">'+esc(row.error || 'OK')+'</span>';
+					var baseMessage = row.human_error ? (row.error ? row.error + ' — ' + row.human_error : row.human_error) : (row.error || 'OK');
+					return '<span style="color:'+(row.error ? '#b32d2e' : '#2271b1')+';">'+esc(baseMessage)+'</span>' + renderEstimateDebug(row);
 				}
 				var methodKey = methodKeyForRow(row);
 				var options = Array.isArray(row.servicepartner_options) ? row.servicepartner_options : [];
@@ -952,10 +988,26 @@ class LP_Cargonizer_Connector {
 					});
 				}
 				var infoParts = [];
+				var partnerDebug = row.servicepartner_fetch || {};
 				if (needsPartner) {
 					var infoText = 'Denne metoden krever servicepartner. Velg servicepartner og prøv igjen.';
 					if (!options.length) { infoText += ' Ingen valg lastet enda.'; }
+					if (partnerDebug && partnerDebug.error_message) {
+						infoText += ' Feil ved henting: ' + partnerDebug.error_message;
+					}
+					if (partnerDebug && partnerDebug.success && !options.length) {
+						infoText += ' Ingen servicepartnere returnert fra API.';
+					}
 					infoParts.push('<div style="color:#b32d2e;">'+esc(infoText)+'</div>');
+					if (partnerDebug && (partnerDebug.http_status || partnerDebug.error_message || partnerDebug.raw_response_body)) {
+						var spDebug = 'HTTP: ' + (partnerDebug.http_status || '—') +
+							' | Melding: ' + (partnerDebug.error_message || '—') +
+							' | URL: ' + (partnerDebug.request_url || '—');
+						if (partnerDebug.raw_response_body) {
+							spDebug += ' | Respons: ' + shortRaw(partnerDebug.raw_response_body, 250);
+						}
+						infoParts.push('<div style="color:#646970;">'+esc(spDebug)+'</div>');
+					}
 				}
 				if (needsSms) {
 					var smsMissing = row.sms_service_missing;
@@ -969,6 +1021,7 @@ class LP_Cargonizer_Connector {
 						(needsPartner ? '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;"><select class="lp-servicepartner-select" data-method-key="'+esc(methodKey)+'" style="min-width:220px;">'+optionsHtml+'</select><button type="button" class="button button-small lp-servicepartner-refresh" data-method-key="'+esc(methodKey)+'">Hent servicepartnere</button></div>' : '') +
 						'<button type="button" class="button button-primary button-small lp-method-retry" data-method-key="'+esc(methodKey)+'">Prøv igjen</button>' +
 						(row.error ? '<div style="color:#646970;">Siste feil: '+esc(row.error)+'</div>' : '') +
+						renderEstimateDebug(row) +
 					'</div>';
 			}
 
@@ -1027,19 +1080,32 @@ class LP_Cargonizer_Connector {
 				return fetch(ajaxurl, { method:'POST', credentials:'same-origin', body: form })
 					.then(function(res){ return res.json(); })
 					.then(function(res){
-						if (!res || !res.success || !res.data || !Array.isArray(res.data.options)) {
-							return [];
-						}
+						var debug = (res && res.data && res.data.debug) ? res.data.debug : {};
+						var options = (res && res.success && res.data && Array.isArray(res.data.options)) ? res.data.options : [];
 						latestEstimateResults = latestEstimateResults.map(function(row){
 							if (methodKeyForRow(row) === methodKey) {
-								row.servicepartner_options = res.data.options;
+								row.servicepartner_options = options;
+								row.servicepartner_fetch = debug;
+								if (!res.success) {
+									row.error = (res.data && res.data.message) ? res.data.message : (row.error || 'Henting av servicepartnere feilet.');
+								}
 							}
 							return row;
 						});
 						renderEstimateResults(latestEstimateResults);
-						return res.data.options;
+						return options;
 					})
-					.catch(function(){ return []; });
+					.catch(function(){
+						latestEstimateResults = latestEstimateResults.map(function(row){
+							if (methodKeyForRow(row) === methodKey) {
+								row.servicepartner_fetch = { success:false, http_status:0, error_message:'Teknisk feil ved henting av servicepartnere.', raw_response_body:'', request_url:'' };
+								row.error = 'Teknisk feil ved henting av servicepartnere.';
+							}
+							return row;
+						});
+						renderEstimateResults(latestEstimateResults);
+						return [];
+					});
 			}
 
 			function runEstimateForSingleMethod(methodKey, selectedServicepartner, useSmsService){
@@ -1557,14 +1623,25 @@ class LP_Cargonizer_Connector {
 		$agreement_id = isset($method['agreement_id']) ? sanitize_text_field((string) $method['agreement_id']) : '';
 		$product_id = isset($method['product_id']) ? sanitize_text_field((string) $method['product_id']) : '';
 
+		$result = array(
+			'success' => false,
+			'http_status' => 0,
+			'error_message' => '',
+			'raw_response_body' => '',
+			'request_url' => '',
+			'options' => array(),
+		);
+
 		if ($agreement_id === '' || $product_id === '') {
-			return array();
+			$result['error_message'] = 'Mangler agreement_id eller product_id.';
+			return $result;
 		}
 
 		$request_url = add_query_arg(array(
 			'transport_agreement' => $agreement_id,
 			'product' => $product_id,
 		), 'https://api.cargonizer.no/servicepartners.xml');
+		$result['request_url'] = $request_url;
 
 		$response = wp_remote_get($request_url, array(
 			'timeout' => 30,
@@ -1572,20 +1649,27 @@ class LP_Cargonizer_Connector {
 		));
 
 		if (is_wp_error($response)) {
-			return array();
+			$result['error_message'] = $response->get_error_message();
+			return $result;
 		}
 
 		$status = wp_remote_retrieve_response_code($response);
 		$body = wp_remote_retrieve_body($response);
+		$result['http_status'] = $status;
+		$result['raw_response_body'] = $body;
+
 		if ($status < 200 || $status >= 300 || $body === '') {
-			return array();
+			$error_details = $this->parse_response_error_details($body);
+			$result['error_message'] = $error_details['message'] !== '' ? $error_details['message'] : ($body === '' ? 'Tom respons fra API.' : 'Uventet API-respons.');
+			return $result;
 		}
 
 		libxml_use_internal_errors(true);
 		$xml = simplexml_load_string($body);
 		if ($xml === false) {
 			libxml_clear_errors();
-			return array();
+			$result['error_message'] = 'Kunne ikke parse XML-respons fra servicepartner-endepunktet.';
+			return $result;
 		}
 
 		$options = array();
@@ -1617,7 +1701,13 @@ class LP_Cargonizer_Connector {
 			}
 		}
 
-		return $options;
+		$result['success'] = true;
+		$result['options'] = $options;
+		if (empty($options)) {
+			$result['error_message'] = 'Ingen servicepartnere returnert fra API.';
+		}
+
+		return $result;
 	}
 
 	public function ajax_get_servicepartner_options() {
@@ -1635,9 +1725,72 @@ class LP_Cargonizer_Connector {
 			'product_id' => isset($_POST['product_id']) ? sanitize_text_field(wp_unslash($_POST['product_id'])) : '',
 		);
 
-		$options = $this->fetch_servicepartner_options($method);
-		wp_send_json_success(array('options' => $options));
+		$servicepartner_result = $this->fetch_servicepartner_options($method);
+
+		if (empty($servicepartner_result['success'])) {
+			wp_send_json_error(array(
+				'message' => $servicepartner_result['error_message'] !== '' ? $servicepartner_result['error_message'] : 'Henting av servicepartnere feilet.',
+				'debug' => $servicepartner_result,
+			), 200);
+		}
+
+		if (empty($servicepartner_result['options'])) {
+			wp_send_json_error(array(
+				'message' => 'Ingen servicepartnere returnert fra API.',
+				'debug' => $servicepartner_result,
+			), 200);
+		}
+
+		wp_send_json_success(array(
+			'options' => $servicepartner_result['options'],
+			'debug' => $servicepartner_result,
+		));
 	}
+
+
+	private function parse_response_error_details($body) {
+		$details = array(
+			'code' => '',
+			'type' => '',
+			'message' => '',
+			'details' => '',
+		);
+
+		if (empty($body)) {
+			return $details;
+		}
+
+		libxml_use_internal_errors(true);
+		$xml = simplexml_load_string($body);
+		if ($xml === false) {
+			libxml_clear_errors();
+			return $details;
+		}
+
+		$map = array(
+			'code' => array('//error/code', '//errors/error/code', '//code', '//error/id'),
+			'type' => array('//error/type', '//errors/error/type', '//type', '//error/category'),
+			'message' => array('//error/message', '//errors/error/message', '//message', '//errors/error', '//error'),
+			'details' => array('//error/details', '//errors/error/details', '//details', '//error/detail', '//errors/error/detail'),
+		);
+
+		foreach ($map as $key => $paths) {
+			foreach ($paths as $path) {
+				$found = $xml->xpath($path);
+				if (!empty($found)) {
+					$value = trim((string) $found[0]);
+					if ($value !== '') {
+						$details[$key] = $value;
+						break;
+					}
+				}
+			}
+		}
+
+		return $details;
+	}
+
+
 
 	private function parse_response_error_message($body) {
 		if (empty($body)) {
@@ -1823,6 +1976,7 @@ class LP_Cargonizer_Connector {
 				'sms_service_error' => '',
 				'requires_servicepartner' => false,
 				'servicepartner_options' => array(),
+				'servicepartner_fetch' => array(),
 				'estimated_price' => '',
 				'original_price' => '',
 				'discount_percent' => $discount_percent,
@@ -1838,31 +1992,61 @@ class LP_Cargonizer_Connector {
 				'negative_base_clamped' => false,
 				'discounted_price' => '',
 				'status' => 'failed',
+				'http_status' => 0,
 				'error' => '',
+				'error_code' => '',
+				'error_type' => '',
+				'error_details' => '',
+				'parsed_error_message' => '',
+				'human_error' => '',
 				'raw_response' => '',
+				'request_summary' => array(
+					'agreement_id' => $method_payload['agreement_id'],
+					'product_id' => $method_payload['product_id'],
+					'number_of_packages' => count($clean_packages),
+					'packages' => $clean_packages,
+					'selected_servicepartner' => $method_payload['servicepartner'],
+					'use_sms_service' => $method_payload['use_sms_service'],
+				),
 			);
 
 			if (is_wp_error($response)) {
 				$item['error'] = $response->get_error_message();
+				$item['parsed_error_message'] = $item['error'];
 				$results[] = $item;
 				continue;
 			}
 
 			$status = wp_remote_retrieve_response_code($response);
+			$item['http_status'] = $status;
 			$body = wp_remote_retrieve_body($response);
 			$item['raw_response'] = $body;
 
 			if ($status < 200 || $status >= 300) {
+				$error_details = $this->parse_response_error_details($body);
+				$item['error_code'] = $error_details['code'];
+				$item['error_type'] = $error_details['type'];
+				$item['parsed_error_message'] = $error_details['message'];
+				$item['error_details'] = $error_details['details'];
 				$item['error'] = 'HTTP ' . $status;
-				$response_message = $this->parse_response_error_message($body);
-				if ($response_message !== '') {
-					$item['error'] .= ': ' . $response_message;
+				if ($item['parsed_error_message'] !== '') {
+					$item['error'] .= ': ' . $item['parsed_error_message'];
 				}
-				if ($this->estimate_requires_servicepartner($item['error'])) {
+				$combined_error_text = strtolower(trim($item['error_code'] . ' ' . $item['parsed_error_message'] . ' ' . $item['error_details'] . ' ' . $item['error']));
+				if (strpos($combined_error_text, 'product_is_out_of_spec') !== false) {
+					$item['human_error'] = 'Produktet er utenfor spesifikasjon. Sannsynlige årsaker: antall kolli, vekt, mål, volum eller manglende påkrevde felter i request.';
+				} elseif (strpos($combined_error_text, 'servicepartner') !== false && (strpos($combined_error_text, 'må angis') !== false || strpos($combined_error_text, 'must be specified') !== false || strpos($combined_error_text, 'missing') !== false)) {
+					$item['human_error'] = 'Denne metoden krever servicepartner. Hent servicepartnere og velg en verdi før du prøver igjen.';
+				} elseif ((strpos($combined_error_text, 'kolli') !== false || strpos($combined_error_text, 'package') !== false) && (strpos($combined_error_text, 'max') !== false || strpos($combined_error_text, '1') !== false || strpos($combined_error_text, 'one') !== false)) {
+					$item['human_error'] = 'Produktet ser ut til å tillate maks 1 kolli. Reduser antall kolli og prøv igjen.';
+				}
+				if ($this->estimate_requires_servicepartner($combined_error_text)) {
 					$item['requires_servicepartner'] = true;
-					$item['servicepartner_options'] = $this->fetch_servicepartner_options($method_payload);
+					$servicepartner_result = $this->fetch_servicepartner_options($method_payload);
+					$item['servicepartner_fetch'] = $servicepartner_result;
+					$item['servicepartner_options'] = isset($servicepartner_result['options']) && is_array($servicepartner_result['options']) ? $servicepartner_result['options'] : array();
 				}
-				if ($this->estimate_requires_sms_service($item['error'])) {
+				if ($this->estimate_requires_sms_service($combined_error_text)) {
 					$item['requires_sms_service'] = true;
 					if ($item['sms_service_id'] === '') {
 						$item['sms_service_missing'] = true;
@@ -1878,6 +2062,7 @@ class LP_Cargonizer_Connector {
 			$item['status'] = $item['estimated_price'] !== '' ? 'ok' : 'unknown';
 			if ($item['status'] === 'unknown') {
 				$item['error'] = 'Fikk svar, men fant ikke estimert prisfelt i responsen.';
+				$item['parsed_error_message'] = $this->parse_response_error_message($body);
 			} else {
 				$parsed_original_price = $this->parse_price_to_number($item['estimated_price']);
 				if ($parsed_original_price === null) {
