@@ -79,6 +79,8 @@ class LP_Cargonizer_Connector {
 				'key' => $method_key,
 				'agreement_id' => isset($method['agreement_id']) ? sanitize_text_field((string) $method['agreement_id']) : '',
 				'agreement_name' => isset($method['agreement_name']) ? sanitize_text_field((string) $method['agreement_name']) : '',
+				'carrier_id' => isset($method['carrier_id']) ? sanitize_text_field((string) $method['carrier_id']) : '',
+				'carrier_name' => isset($method['carrier_name']) ? sanitize_text_field((string) $method['carrier_name']) : '',
 				'product_id' => isset($method['product_id']) ? sanitize_text_field((string) $method['product_id']) : '',
 				'product_name' => isset($method['product_name']) ? sanitize_text_field((string) $method['product_name']) : '',
 				'label' => isset($method['label']) ? sanitize_text_field((string) $method['label']) : '',
@@ -224,6 +226,8 @@ class LP_Cargonizer_Connector {
 		foreach ($agreements as $agreement) {
 			$agreement_id = isset($agreement['agreement_id']) ? (string) $agreement['agreement_id'] : '';
 			$agreement_name = isset($agreement['agreement_name']) ? (string) $agreement['agreement_name'] : '';
+			$carrier_id = isset($agreement['carrier_id']) ? (string) $agreement['carrier_id'] : '';
+			$carrier_name = isset($agreement['carrier_name']) ? (string) $agreement['carrier_name'] : '';
 
 			if (empty($agreement['products']) || !is_array($agreement['products'])) {
 				continue;
@@ -242,9 +246,11 @@ class LP_Cargonizer_Connector {
 					'key' => $key,
 					'agreement_id' => $agreement_id,
 					'agreement_name' => $agreement_name,
+					'carrier_id' => $carrier_id,
+					'carrier_name' => $carrier_name,
 					'product_id' => $product_id,
 					'product_name' => $product_name,
-					'label' => trim($agreement_name . ' - ' . $product_name),
+					'label' => $this->format_method_label($agreement_name, $product_name, $carrier_name),
 				);
 			}
 		}
@@ -302,10 +308,32 @@ class LP_Cargonizer_Connector {
 		foreach ($agreements as $agreement) {
 			$agreement_id   = $this->xml_value($agreement, array('id', 'transport_agreement_id'));
 			$agreement_name = $this->xml_value($agreement, array('name', 'title'));
+			$carrier_name = $this->xml_value($agreement, array('carrier_name', 'provider_name', 'transporter_name', 'carrier', 'provider', 'transportor', 'transportor_name', 'transportør'));
+			$carrier_id = $this->xml_value($agreement, array('carrier_id', 'provider_id', 'transporter_id', 'carrier', 'provider', 'transportor_id'));
+
+			if (isset($agreement->carrier)) {
+				if ($carrier_name === '') {
+					$carrier_name = $this->xml_value($agreement->carrier, array('name', 'title'));
+				}
+				if ($carrier_id === '') {
+					$carrier_id = $this->xml_value($agreement->carrier, array('id', 'identifier'));
+				}
+			}
+
+			if (isset($agreement->provider)) {
+				if ($carrier_name === '') {
+					$carrier_name = $this->xml_value($agreement->provider, array('name', 'title'));
+				}
+				if ($carrier_id === '') {
+					$carrier_id = $this->xml_value($agreement->provider, array('id', 'identifier'));
+				}
+			}
 
 			$item = array(
 				'agreement_id'   => $agreement_id,
 				'agreement_name' => $agreement_name,
+				'carrier_id'     => $carrier_id,
+				'carrier_name'   => $carrier_name,
 				'products'       => array(),
 			);
 
@@ -353,6 +381,23 @@ class LP_Cargonizer_Connector {
 		}
 
 		return $result;
+	}
+
+	private function format_method_label($agreement_name, $product_name, $carrier_name = '') {
+		$agreement_name = trim((string) $agreement_name);
+		$product_name = trim((string) $product_name);
+		$carrier_name = trim((string) $carrier_name);
+
+		$base_label = trim($agreement_name . ' - ' . $product_name, ' -');
+		if ($base_label === '') {
+			$base_label = $agreement_name !== '' ? $agreement_name : $product_name;
+		}
+
+		if ($carrier_name !== '') {
+			return $carrier_name . ' - ' . $base_label;
+		}
+
+		return $base_label;
 	}
 
 	private function xml_value($node, $possible_keys = array()) {
@@ -600,8 +645,8 @@ class LP_Cargonizer_Connector {
 				options.forEach(function(option){
 					var label = option.label || ((option.agreement_name || '') + ' - ' + (option.product_name || ''));
 					html += '<label style="display:flex;gap:8px;align-items:flex-start;padding:8px;border:1px solid #dcdcde;background:#fff;">' +
-						'<input type="checkbox" class="lp-shipping-option" data-agreement-id="'+esc(option.agreement_id || '')+'" data-agreement-name="'+esc(option.agreement_name || '')+'" data-product-id="'+esc(option.product_id || '')+'" data-product-name="'+esc(option.product_name || '')+'">' +
-						'<span><strong>'+esc(label)+'</strong><br><span style="color:#646970;">Agreement: '+esc(option.agreement_id || '—')+' / Produkt: '+esc(option.product_id || '—')+'</span></span>' +
+						'<input type="checkbox" class="lp-shipping-option" data-agreement-id="'+esc(option.agreement_id || '')+'" data-agreement-name="'+esc(option.agreement_name || '')+'" data-carrier-id="'+esc(option.carrier_id || '')+'" data-carrier-name="'+esc(option.carrier_name || '')+'" data-product-id="'+esc(option.product_id || '')+'" data-product-name="'+esc(option.product_name || '')+'">' +
+						'<span><strong>'+esc(label)+'</strong><br><span style="color:#646970;">Transportør: '+esc(option.carrier_name || '—') + (option.carrier_id ? ' (' + esc(option.carrier_id) + ')' : '') + ' / Agreement: '+esc(option.agreement_id || '—')+' / Produkt: '+esc(option.product_id || '—')+'</span></span>' +
 					'</label>';
 				});
 				html += '</div>';
@@ -614,6 +659,8 @@ class LP_Cargonizer_Connector {
 					selected.push({
 						agreement_id: input.getAttribute('data-agreement-id') || '',
 						agreement_name: input.getAttribute('data-agreement-name') || '',
+						carrier_id: input.getAttribute('data-carrier-id') || '',
+						carrier_name: input.getAttribute('data-carrier-name') || '',
 						product_id: input.getAttribute('data-product-id') || '',
 						product_name: input.getAttribute('data-product-name') || ''
 					});
@@ -629,13 +676,14 @@ class LP_Cargonizer_Connector {
 				var rows = results.map(function(row){
 					return '<tr>' +
 						'<td>'+esc(row.method_name || 'Ukjent metode')+'</td>' +
+						'<td>'+esc((row.carrier_name || '—') + (row.carrier_id ? ' (' + row.carrier_id + ')' : ''))+'</td>' +
 						'<td>'+esc((row.agreement_id || '') + (row.product_id ? ' / ' + row.product_id : ''))+'</td>' +
 						'<td>'+esc(row.estimated_price || '—')+'</td>' +
 						'<td>'+esc(row.status || 'unknown')+'</td>' +
 						'<td style="color:'+(row.error ? '#b32d2e' : '#2271b1')+';">'+esc(row.error || 'OK')+'</td>' +
 					'</tr>';
 				}).join('');
-				resultsContent.innerHTML = '<table class="widefat striped"><thead><tr><th>Fraktmetode / produkt</th><th>ID</th><th>Estimert pris</th><th>Status</th><th>Melding</th></tr></thead><tbody>'+rows+'</tbody></table>';
+				resultsContent.innerHTML = '<table class="widefat striped"><thead><tr><th>Fraktmetode / produkt</th><th>Transportør / provider</th><th>ID</th><th>Estimert pris</th><th>Status</th><th>Melding</th></tr></thead><tbody>'+rows+'</tbody></table>';
 			}
 
 			function fetchShippingOptions(){
@@ -1078,6 +1126,8 @@ class LP_Cargonizer_Connector {
 			$method_payload = array(
 				'agreement_id' => isset($method['agreement_id']) ? sanitize_text_field($method['agreement_id']) : '',
 				'agreement_name' => isset($method['agreement_name']) ? sanitize_text_field($method['agreement_name']) : '',
+				'carrier_id' => isset($method['carrier_id']) ? sanitize_text_field($method['carrier_id']) : '',
+				'carrier_name' => isset($method['carrier_name']) ? sanitize_text_field($method['carrier_name']) : '',
 				'product_id' => isset($method['product_id']) ? sanitize_text_field($method['product_id']) : '',
 				'product_name' => isset($method['product_name']) ? sanitize_text_field($method['product_name']) : '',
 			);
@@ -1099,8 +1149,10 @@ class LP_Cargonizer_Connector {
 			));
 
 			$item = array(
-				'method_name' => trim($method_payload['agreement_name'] . ' - ' . $method_payload['product_name']),
+				'method_name' => $this->format_method_label($method_payload['agreement_name'], $method_payload['product_name'], $method_payload['carrier_name']),
 				'agreement_id' => $method_payload['agreement_id'],
+				'carrier_id' => $method_payload['carrier_id'],
+				'carrier_name' => $method_payload['carrier_name'],
 				'product_id' => $method_payload['product_id'],
 				'estimated_price' => '',
 				'status' => 'failed',
@@ -1284,7 +1336,7 @@ class LP_Cargonizer_Connector {
 									<input type="checkbox" name="lp_cargonizer_enabled_methods[]" value="<?php echo esc_attr($method_key); ?>" <?php checked(in_array($method_key, $settings['enabled_methods'], true)); ?>>
 									<span>
 										<strong><?php echo esc_html(isset($method['label']) ? $method['label'] : 'Ukjent metode'); ?></strong><br>
-										<small>Agreement: <?php echo esc_html(isset($method['agreement_id']) ? $method['agreement_id'] : '—'); ?> / Produkt: <?php echo esc_html(isset($method['product_id']) ? $method['product_id'] : '—'); ?></small>
+										<small>Transportør: <?php echo esc_html(isset($method['carrier_name']) && $method['carrier_name'] !== '' ? $method['carrier_name'] : '—'); ?><?php echo esc_html(isset($method['carrier_id']) && $method['carrier_id'] !== '' ? ' (' . $method['carrier_id'] . ')' : ''); ?> / Agreement: <?php echo esc_html(isset($method['agreement_id']) ? $method['agreement_id'] : '—'); ?> / Produkt: <?php echo esc_html(isset($method['product_id']) ? $method['product_id'] : '—'); ?></small>
 									</span>
 								</label>
 							<?php endforeach; ?>
@@ -1342,11 +1394,12 @@ class LP_Cargonizer_Connector {
 							<table class="widefat striped" style="margin-top:20px;">
 								<thead>
 									<tr>
-										<th>Transport agreement ID</th>
-										<th>Transport agreement</th>
-										<th>Produkt ID</th>
-										<th>Produkt</th>
-										<th>Tjenester</th>
+									<th>Transport agreement ID</th>
+									<th>Transport agreement</th>
+									<th>Transportør / provider</th>
+									<th>Produkt ID</th>
+									<th>Produkt</th>
+									<th>Tjenester</th>
 									</tr>
 								</thead>
 								<tbody>
@@ -1356,6 +1409,7 @@ class LP_Cargonizer_Connector {
 												<tr>
 													<td><?php echo esc_html($agreement['agreement_id']); ?></td>
 													<td><?php echo esc_html($agreement['agreement_name']); ?></td>
+													<td><?php echo esc_html(!empty($agreement['carrier_name']) ? $agreement['carrier_name'] : '—'); ?><?php echo esc_html(!empty($agreement['carrier_id']) ? ' (' . $agreement['carrier_id'] . ')' : ''); ?></td>
 													<td><?php echo esc_html($product['product_id']); ?></td>
 													<td><?php echo esc_html($product['product_name']); ?></td>
 													<td>
@@ -1377,6 +1431,7 @@ class LP_Cargonizer_Connector {
 											<tr>
 												<td><?php echo esc_html($agreement['agreement_id']); ?></td>
 												<td><?php echo esc_html($agreement['agreement_name']); ?></td>
+												<td><?php echo esc_html(!empty($agreement['carrier_name']) ? $agreement['carrier_name'] : '—'); ?><?php echo esc_html(!empty($agreement['carrier_id']) ? ' (' . $agreement['carrier_id'] . ')' : ''); ?></td>
 												<td>—</td>
 												<td>—</td>
 												<td>—</td>
