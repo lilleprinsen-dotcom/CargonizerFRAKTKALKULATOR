@@ -785,6 +785,16 @@ class LP_Cargonizer_Connector {
 
 		<script>
 		(function(){
+			function getOrderIdFromCurrentUrl() {
+				try {
+					var url = new URL(window.location.href);
+					var orderId = url.searchParams.get('post') || url.searchParams.get('id') || '';
+					return orderId ? String(orderId) : '';
+				} catch (e) {
+					return '';
+				}
+			}
+
 			var modal = document.getElementById('lp-cargonizer-estimate-modal');
 			if (!modal) { return; }
 			var loading = document.getElementById('lp-cargonizer-estimate-loading');
@@ -1496,7 +1506,7 @@ class LP_Cargonizer_Connector {
 				var btn = e.target.closest('.lp-cargonizer-estimate-open');
 				if (!btn) { return; }
 				e.preventDefault();
-				currentOrderId = btn.getAttribute('data-order-id');
+				currentOrderId = btn.getAttribute('data-order-id') || getOrderIdFromCurrentUrl();
 				openModal();
 				loading.style.display = 'block';
 				errorBox.style.display = 'none';
@@ -1518,7 +1528,8 @@ class LP_Cargonizer_Connector {
 					.then(function(res){
 						loading.style.display = 'none';
 						if (!res || !res.success || !res.data) {
-							errorBox.textContent = 'Kunne ikke hente ordredata.';
+							var serverMessage = res && res.data && res.data.message ? res.data.message : '';
+							errorBox.textContent = serverMessage || 'Kunne ikke hente ordredata.';
 							errorBox.style.display = 'block';
 							return;
 						}
