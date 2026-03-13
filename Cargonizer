@@ -1350,32 +1350,23 @@ class LP_Cargonizer_Connector {
 				});
 
 				function renderOkRow(row){
-					var agreementText = row.agreement_description || row.agreement_name || row.agreement_id || '—';
-					if (row.agreement_number) {
-						agreementText += ' (' + row.agreement_number + ')';
-					}
-					var compactIdHtml = '<div><strong>Fraktavtale:</strong> '+esc(agreementText || '—')+'</div>' +
-						'<div><strong>Agreement ID:</strong> '+esc(row.agreement_id || '—')+'</div>' +
-						'<div><strong>Produkt:</strong> '+esc(row.product_id || '—')+'</div>';
-					var basePriceText = row.base_price !== '' && row.base_price !== undefined ? row.base_price : (row.selected_price_value || row.original_price || row.estimated_price || '—');
+					var basePriceText = row.base_price !== '' && row.base_price !== undefined ? row.base_price : (row.selected_price_value || '—');
 					var discountPercentText = row.discount_percent !== '' && row.discount_percent !== undefined ? row.discount_percent : '—';
 					var discountedBaseText = row.discounted_base !== '' && row.discounted_base !== undefined ? row.discounted_base : '—';
 					var fuelSurchargeText = row.fuel_surcharge !== '' && row.fuel_surcharge !== undefined ? row.fuel_surcharge : '—';
 					var tollSurchargeText = row.toll_surcharge !== '' && row.toll_surcharge !== undefined ? row.toll_surcharge : '—';
 					var handlingFeeText = row.handling_fee !== '' && row.handling_fee !== undefined ? row.handling_fee : '—';
-					var subtotalExVatText = row.subtotal_ex_vat !== '' && row.subtotal_ex_vat !== undefined ? row.subtotal_ex_vat : (row.adjusted_price || '—');
 					var inclVatText = row.price_incl_vat !== '' && row.price_incl_vat !== undefined ? row.price_incl_vat : '—';
 					var roundedText = row.rounded_price !== '' && row.rounded_price !== undefined ? row.rounded_price : '—';
-					var finalExVatText = row.final_price_ex_vat !== '' && row.final_price_ex_vat !== undefined ? row.final_price_ex_vat : (row.discounted_price || '—');
+					var finalExVatText = row.final_price_ex_vat !== '' && row.final_price_ex_vat !== undefined ? row.final_price_ex_vat : '—';
 					var statusText = row.status || 'unknown';
 					var priceFieldText = row.selected_price_source || row.price_source_config || '—';
 					if (row.price_source_fallback_used && row.price_source_config) {
 						priceFieldText += ' (fallback fra ' + row.price_source_config + ')';
 					}
 					return '<tr>' +
-						'<td>'+esc(row.method_name || 'Ukjent metode')+'</td>' +
+						'<td>'+esc(row.method_name || row.product_id || 'Ukjent metode')+'</td>' +
 						'<td>'+esc((row.carrier_name || '—') + (row.carrier_id ? ' (' + row.carrier_id + ')' : ''))+'</td>' +
-						'<td>'+compactIdHtml+'</td>' +
 						'<td>'+esc(priceFieldText)+'</td>' +
 						'<td>'+esc(basePriceText)+'</td>' +
 						'<td>'+esc(discountPercentText)+'</td>' +
@@ -1383,12 +1374,10 @@ class LP_Cargonizer_Connector {
 						'<td>'+esc(fuelSurchargeText)+'</td>' +
 						'<td>'+esc(tollSurchargeText)+'</td>' +
 						'<td>'+esc(handlingFeeText)+'</td>' +
-						'<td>'+esc(subtotalExVatText)+'</td>' +
 						'<td>'+esc(inclVatText)+'</td>' +
 						'<td>'+esc(roundedText)+'</td>' +
 						'<td>'+esc(finalExVatText)+'</td>' +
 						'<td>'+esc(statusText)+'</td>' +
-						'<td>'+renderServicepartnerControls(row)+'</td>' +
 					'</tr>';
 				}
 
@@ -1411,8 +1400,8 @@ class LP_Cargonizer_Connector {
 				}
 
 				var okRows = okResults.map(renderOkRow).join('');
-				var okTableHtml = '<table class="widefat striped"><thead><tr><th>Fraktmetode / produkt</th><th>Transportør / provider</th><th>ID</th><th>Prisfelt brukt</th><th>Grunnpris</th><th>Rabatt %</th><th>Rabattert grunnpris</th><th>Drivstofftillegg</th><th>Bomtillegg</th><th>Håndteringsgebyr</th><th>Subtotal eks. mva</th><th>Pris inkl. mva</th><th>Avrundet pris</th><th>Sluttpris eks. mva</th><th>Status</th><th>Melding</th></tr></thead><tbody>' +
-					(okRows || '<tr><td colspan="16"><em>Ingen vellykkede metoder.</em></td></tr>') +
+				var okTableHtml = '<table class="widefat striped"><thead><tr><th>Fraktmetode</th><th>Transportør</th><th>Prisfelt brukt</th><th>Grunnpris</th><th>Rabatt %</th><th>Pris etter rabatt</th><th>Drivstofftillegg</th><th>Bomtillegg</th><th>Håndteringstillegg</th><th>Pris inkl. mva</th><th>Avrundet pris</th><th>Sluttpris eks. mva</th><th>Status</th></tr></thead><tbody>' +
+					(okRows || '<tr><td colspan="13"><em>Ingen vellykkede metoder.</em></td></tr>') +
 					'</tbody></table>';
 
 				var failedSectionHtml = '';
