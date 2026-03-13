@@ -168,8 +168,8 @@ class LP_Cargonizer_Connector {
 				'toll_value' => $this->sanitize_non_negative_number(isset($pricing['toll_value']) ? $pricing['toll_value'] : 0),
 				'toll_percent_max' => $this->sanitize_non_negative_number(isset($pricing['toll_percent_max']) ? $pricing['toll_percent_max'] : 0),
 				'price_source' => $this->sanitize_price_source(isset($pricing['price_source']) ? $pricing['price_source'] : 'estimated'),
-				'fixed_addition' => $this->sanitize_non_negative_number(isset($pricing['fixed_addition']) ? $pricing['fixed_addition'] : ($fuel_surcharge + $toll_surcharge + $handling_fee)),
-				'percentage_addition' => $this->sanitize_non_negative_number(isset($pricing['percentage_addition']) ? $pricing['percentage_addition'] : 0),
+				'fixed_addition' => round($fuel_surcharge + $toll_surcharge + $handling_fee, 2),
+				'percentage_addition' => round(0 - $discount_percent, 2),
 				'vat_percent' => $this->sanitize_non_negative_number(isset($pricing['vat_percent']) ? $pricing['vat_percent'] : 0),
 				'rounding_mode' => $this->sanitize_rounding_mode(isset($pricing['rounding_mode']) ? $pricing['rounding_mode'] : 'none'),
 			);
@@ -179,6 +179,9 @@ class LP_Cargonizer_Connector {
 			if (!isset($output['method_pricing'][$method_key])) {
 				$output['method_pricing'][$method_key] = array(
 					'discount_percent' => $discount_value,
+					'fuel_surcharge' => 0,
+					'toll_surcharge' => 0,
+					'handling_fee' => 0,
 					'fuel_type' => 'fixed',
 					'fuel_value' => 0,
 					'toll_type' => 'fixed',
@@ -186,7 +189,7 @@ class LP_Cargonizer_Connector {
 					'toll_percent_max' => 0,
 					'price_source' => 'estimated',
 					'fixed_addition' => 0,
-					'percentage_addition' => 0,
+					'percentage_addition' => round(0 - $discount_value, 2),
 					'vat_percent' => 0,
 					'rounding_mode' => 'none',
 				);
@@ -504,12 +507,8 @@ class LP_Cargonizer_Connector {
 			$handling_fee = isset($raw['handling_fee'])
 				? $this->sanitize_non_negative_number($raw['handling_fee'])
 				: 0;
-			$fixed_addition = isset($raw['fixed_addition'])
-				? $this->sanitize_non_negative_number($raw['fixed_addition'])
-				: 0;
-			$percentage_addition = isset($raw['percentage_addition'])
-				? $this->sanitize_non_negative_number($raw['percentage_addition'])
-				: 0;
+			$fixed_addition = 0;
+			$percentage_addition = 0;
 
 			// Bakoverkompatibilitet: map gamle rabatt/drivstoff/bom-felt til ny modell hvis ny ikke finnes.
 			if (!isset($raw['price_source']) && !isset($raw['fixed_addition']) && !isset($raw['percentage_addition'])) {
@@ -532,12 +531,11 @@ class LP_Cargonizer_Connector {
 				$fuel_surcharge = $fixed_addition;
 				$toll_surcharge = 0;
 				$handling_fee = 0;
-			} else {
-				$fixed_addition = $fuel_surcharge + $toll_surcharge + $handling_fee;
-				if (!isset($raw['percentage_addition'])) {
-					$percentage_addition = 0 - (isset($raw['discount_percent']) ? $this->sanitize_discount_percent($raw['discount_percent']) : $default['discount_percent']);
-				}
 			}
+
+			$fixed_addition = $fuel_surcharge + $toll_surcharge + $handling_fee;
+			$discount_for_calc = isset($raw['discount_percent']) ? $this->sanitize_discount_percent($raw['discount_percent']) : $default['discount_percent'];
+			$percentage_addition = round(0 - $discount_for_calc, 2);
 
 			$result[$method_key] = array(
 				'discount_percent' => isset($raw['discount_percent']) ? $this->sanitize_discount_percent($raw['discount_percent']) : $default['discount_percent'],
@@ -1113,8 +1111,9 @@ class LP_Cargonizer_Connector {
 					'price_source_fallback_reason: ' + (row.price_source_fallback_reason || '—'),
 					'rounding_mode: ' + (row.rounding_mode || '—'),
 					'base_price: ' + (row.base_price || '—'),
-					'fixed_addition: ' + (row.fixed_addition || '—'),
-					'percentage_addition: ' + (row.percentage_addition || '—'),
+					'fuel_surcharge: ' + (row.fuel_surcharge || '—'),
+					'toll_surcharge: ' + (row.toll_surcharge || '—'),
+					'handling_fee: ' + (row.handling_fee || '—'),
 					'vat_percent: ' + (row.vat_percent || '—'),
 					'price_incl_vat: ' + (row.price_incl_vat || '—'),
 					'rounded_price: ' + (row.rounded_price || '—'),
@@ -1344,8 +1343,9 @@ class LP_Cargonizer_Connector {
 						'<div><strong>Agreement ID:</strong> '+esc(row.agreement_id || '—')+'</div>' +
 						'<div><strong>Produkt:</strong> '+esc(row.product_id || '—')+'</div>';
 					var basePriceText = row.base_price !== '' && row.base_price !== undefined ? row.base_price : (row.selected_price_value || row.original_price || row.estimated_price || '—');
-					var fixedAdditionText = row.fixed_addition !== '' && row.fixed_addition !== undefined ? row.fixed_addition : '—';
-					var percentageAdditionText = row.percentage_addition !== '' && row.percentage_addition !== undefined ? row.percentage_addition + '%' : '—';
+					var fuelSurchargeText = row.fuel_surcharge !== '' && row.fuel_surcharge !== undefined ? row.fuel_surcharge : '—';
+					var tollSurchargeText = row.toll_surcharge !== '' && row.toll_surcharge !== undefined ? row.toll_surcharge : '—';
+					var handlingFeeText = row.handling_fee !== '' && row.handling_fee !== undefined ? row.handling_fee : '—';
 					var inclVatText = row.price_incl_vat !== '' && row.price_incl_vat !== undefined ? row.price_incl_vat : '—';
 					var roundedText = row.rounded_price !== '' && row.rounded_price !== undefined ? row.rounded_price : '—';
 					var finalExVatText = row.final_price_ex_vat !== '' && row.final_price_ex_vat !== undefined ? row.final_price_ex_vat : (row.discounted_price || '—');
@@ -1360,8 +1360,9 @@ class LP_Cargonizer_Connector {
 						'<td>'+compactIdHtml+'</td>' +
 						'<td>'+esc(priceFieldText)+'</td>' +
 						'<td>'+esc(basePriceText)+'</td>' +
-						'<td>'+esc(fixedAdditionText)+'</td>' +
-						'<td>'+esc(percentageAdditionText)+'</td>' +
+						'<td>'+esc(fuelSurchargeText)+'</td>' +
+						'<td>'+esc(tollSurchargeText)+'</td>' +
+						'<td>'+esc(handlingFeeText)+'</td>' +
 						'<td>'+esc(inclVatText)+'</td>' +
 						'<td>'+esc(roundedText)+'</td>' +
 						'<td>'+esc(finalExVatText)+'</td>' +
@@ -1369,7 +1370,7 @@ class LP_Cargonizer_Connector {
 						'<td>'+renderServicepartnerControls(row)+'</td>' +
 					'</tr>';
 				}).join('');
-				resultsContent.innerHTML = '<table class="widefat striped"><thead><tr><th>Fraktmetode / produkt</th><th>Transportør / provider</th><th>ID</th><th>Prisfelt brukt</th><th>Grunnpris</th><th>Fast tillegg</th><th>Prosentpåslag</th><th>Pris inkl. mva</th><th>Avrundet pris</th><th>Sluttpris eks. mva</th><th>Status</th><th>Melding</th></tr></thead><tbody>'+rows+'</tbody></table>';
+				resultsContent.innerHTML = '<table class="widefat striped"><thead><tr><th>Fraktmetode / produkt</th><th>Transportør / provider</th><th>ID</th><th>Prisfelt brukt</th><th>Grunnpris</th><th>Drivstofftillegg</th><th>Bomtillegg</th><th>Håndteringsgebyr</th><th>Pris inkl. mva</th><th>Avrundet pris</th><th>Sluttpris eks. mva</th><th>Status</th><th>Melding</th></tr></thead><tbody>'+rows+'</tbody></table>';
 			}
 
 			function fetchShippingOptions(){
@@ -2721,7 +2722,7 @@ class LP_Cargonizer_Connector {
 										$pricing = isset($method_pricing[$method_key]) && is_array($method_pricing[$method_key]) ? $method_pricing[$method_key] : array();
 										$discount_value = isset($pricing['discount_percent']) ? $this->sanitize_discount_percent($pricing['discount_percent']) : (isset($method_discounts[$method_key]) ? $this->sanitize_discount_percent($method_discounts[$method_key]) : 0);
 										$price_source = $this->sanitize_price_source(isset($pricing['price_source']) ? $pricing['price_source'] : 'estimated');
-										$fuel_surcharge = $this->sanitize_non_negative_number(isset($pricing['fuel_surcharge']) ? $pricing['fuel_surcharge'] : (isset($pricing['fixed_addition']) ? $pricing['fixed_addition'] : 0));
+										$fuel_surcharge = $this->sanitize_non_negative_number(isset($pricing['fuel_surcharge']) ? $pricing['fuel_surcharge'] : 0);
 										$toll_surcharge = $this->sanitize_non_negative_number(isset($pricing['toll_surcharge']) ? $pricing['toll_surcharge'] : 0);
 										$handling_fee = $this->sanitize_non_negative_number(isset($pricing['handling_fee']) ? $pricing['handling_fee'] : 0);
 										$vat_percent = $this->sanitize_non_negative_number(isset($pricing['vat_percent']) ? $pricing['vat_percent'] : 0);
