@@ -17,6 +17,7 @@ class LP_Cargonizer_Connector {
 	const NONCE_ACTION_ORDER_DATA = 'lp_cargonizer_get_order_data';
 	const NONCE_ACTION_FETCH_OPTIONS = 'lp_cargonizer_fetch_shipping_options';
 	const NONCE_ACTION_ESTIMATE = 'lp_cargonizer_run_bulk_estimate';
+	const NONCE_ACTION_SERVICEPARTNERS = 'lp_cargonizer_fetch_servicepartners';
 
 	public function __construct() {
 		add_action('admin_menu', array($this, 'add_admin_menu'), 99);
@@ -26,6 +27,7 @@ class LP_Cargonizer_Connector {
 		add_action('wp_ajax_lp_cargonizer_get_order_estimate_data', array($this, 'ajax_get_order_estimate_data'));
 		add_action('wp_ajax_lp_cargonizer_get_shipping_options', array($this, 'ajax_get_shipping_options'));
 		add_action('wp_ajax_lp_cargonizer_run_bulk_estimate', array($this, 'ajax_run_bulk_estimate'));
+		add_action('wp_ajax_lp_cargonizer_get_servicepartner_options', array($this, 'ajax_get_servicepartner_options'));
 	}
 
 	public function add_admin_menu() {
@@ -595,6 +597,7 @@ class LP_Cargonizer_Connector {
 			var resultsContent = document.getElementById('lp-cargonizer-results-content');
 			var runEstimateBtn = document.getElementById('lp-cargonizer-run-estimate');
 			var currentOrderId = null;
+			var latestEstimateResults = [];
 
 			function esc(s){
 				s = (s === null || s === undefined) ? '' : String(s);
@@ -762,11 +765,153 @@ class LP_Cargonizer_Connector {
 				return selected;
 			}
 
+
+			function methodKeyForRow(row){
+				return (row && row.agreement_id ? row.agreement_id : '') + '|' + (row && row.product_id ? row.product_id : '');
+			}
+
+			function needsServicepartner(row){
+				if (!row) { return false; }
+				if (row.requires_servicepartner) { return true; }
+				var errorText = (row.error || '').toLowerCase();
+				return errorText.indexOf('servicepartner må angis') !== -1 || errorText.indexOf('servicepartner maa angis') !== -1 || errorText.indexOf('servicepartner must be specified') !== -1;
+			}
+
+			function renderServicepartnerControls(row){
+				if (!needsServicepartner(row)) {
+					return '<span style="color:'+(row.error ? '#b32d2e' : '#2271b1')+';">'+esc(row.error || 'OK')+'</span>';
+				}
+				var methodKey = methodKeyForRow(row);
+				var options = Array.isArray(row.servicepartner_options) ? row.servicepartner_options : [];
+				var currentValue = row.selected_servicepartner || '';
+				var optionsHtml = '<option value="">Velg servicepartner…</option>';
+				if (options.length) {
+					options.forEach(function(opt){
+						var value = (opt && opt.value) ? String(opt.value) : '';
+						var label = (opt && opt.label) ? String(opt.label) : value;
+						if (!value) { return; }
+						optionsHtml += '<option value="'+esc(value)+'" '+(currentValue === value ? 'selected' : '')+'>'+esc(label)+'</option>';
+					});
+				}
+				var infoText = 'Denne metoden krever servicepartner. Velg servicepartner og prøv igjen.';
+				if (!options.length) {
+					infoText += ' Ingen valg lastet enda.';
+				}
+				return '' +
+					'<div style="display:flex;flex-direction:column;gap:6px;">' +
+						'<div style="color:#b32d2e;">'+esc(infoText)+'</div>' +
+						'<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">' +
+							'<select class="lp-servicepartner-select" data-method-key="'+esc(methodKey)+'" style="min-width:220px;">'+optionsHtml+'</select>' +
+							'<button type="button" class="button button-small lp-servicepartner-refresh" data-method-key="'+esc(methodKey)+'">Hent servicepartnere</button>' +
+							'<button type="button" class="button button-primary button-small lp-servicepartner-retry" data-method-key="'+esc(methodKey)+'">Prøv igjen</button>' +
+						'</div>' +
+						(row.error ? '<div style="color:#646970;">Siste feil: '+esc(row.error)+'</div>' : '') +
+					'</div>';
+			}
+
+			function mergeResultByMethod(updatedRow){
+				var key = methodKeyForRow(updatedRow);
+				if (!key) { return; }
+				var replaced = false;
+				latestEstimateResults = latestEstimateResults.map(function(row){
+					if (methodKeyForRow(row) === key) {
+						replaced = true;
+						return updatedRow;
+					}
+					return row;
+				});
+				if (!replaced) {
+					latestEstimateResults.push(updatedRow);
+				}
+			}
+
+			function getMethodDataByKey(methodKey){
+				var parts = String(methodKey || '').split('|');
+				if (parts.length < 2) { return null; }
+				var selected = getSelectedMethods();
+				for (var i = 0; i < selected.length; i++) {
+					if ((selected[i].agreement_id || '') === parts[0] && (selected[i].product_id || '') === parts[1]) {
+						return selected[i];
+					}
+				}
+				for (var j = 0; j < latestEstimateResults.length; j++) {
+					if (methodKeyForRow(latestEstimateResults[j]) === methodKey) {
+						return {
+							agreement_id: latestEstimateResults[j].agreement_id || '',
+							agreement_name: latestEstimateResults[j].agreement_name || '',
+							agreement_description: latestEstimateResults[j].agreement_description || '',
+							agreement_number: latestEstimateResults[j].agreement_number || '',
+							carrier_id: latestEstimateResults[j].carrier_id || '',
+							carrier_name: latestEstimateResults[j].carrier_name || '',
+							product_id: latestEstimateResults[j].product_id || '',
+							product_name: latestEstimateResults[j].product_name || ''
+						};
+					}
+				}
+				return null;
+			}
+
+			function fetchServicepartnersForMethod(methodKey){
+				var methodData = getMethodDataByKey(methodKey);
+				if (!methodData) { return Promise.resolve([]); }
+				var form = new FormData();
+				form.append('action', 'lp_cargonizer_get_servicepartner_options');
+				form.append('nonce', '<?php echo esc_js(wp_create_nonce(self::NONCE_ACTION_SERVICEPARTNERS)); ?>');
+				form.append('agreement_id', methodData.agreement_id || '');
+				form.append('product_id', methodData.product_id || '');
+				return fetch(ajaxurl, { method:'POST', credentials:'same-origin', body: form })
+					.then(function(res){ return res.json(); })
+					.then(function(res){
+						if (!res || !res.success || !res.data || !Array.isArray(res.data.options)) {
+							return [];
+						}
+						latestEstimateResults = latestEstimateResults.map(function(row){
+							if (methodKeyForRow(row) === methodKey) {
+								row.servicepartner_options = res.data.options;
+							}
+							return row;
+						});
+						renderEstimateResults(latestEstimateResults);
+						return res.data.options;
+					})
+					.catch(function(){ return []; });
+			}
+
+			function runEstimateForSingleMethod(methodKey, selectedServicepartner){
+				var colli = collectColliData();
+				if (!colli.isValid || !colli.payload.packages || !colli.payload.packages.length) { return; }
+				var methodData = getMethodDataByKey(methodKey);
+				if (!methodData) { return; }
+				var form = new FormData();
+				form.append('action', 'lp_cargonizer_run_bulk_estimate');
+				form.append('nonce', '<?php echo esc_js(wp_create_nonce(self::NONCE_ACTION_ESTIMATE)); ?>');
+				form.append('order_id', currentOrderId);
+				colli.payload.packages.forEach(function(pkg, idx){
+					Object.keys(pkg).forEach(function(key){ form.append('packages['+idx+']['+key+']', pkg[key]); });
+				});
+				Object.keys(methodData).forEach(function(key){ form.append('methods[0]['+key+']', methodData[key]); });
+				if (selectedServicepartner) {
+					form.append('methods[0][servicepartner]', selectedServicepartner);
+				}
+				fetch(ajaxurl, { method:'POST', credentials:'same-origin', body: form })
+					.then(function(res){ return res.json(); })
+					.then(function(res){
+						if (!res || !res.success || !res.data || !Array.isArray(res.data.results) || !res.data.results.length) {
+							return;
+						}
+						var row = res.data.results[0];
+						mergeResultByMethod(row);
+						renderEstimateResults(latestEstimateResults);
+					});
+			}
+
 			function renderEstimateResults(results){
 				if (!Array.isArray(results) || !results.length) {
+					latestEstimateResults = [];
 					resultsContent.innerHTML = '<em>Ingen resultater å vise.</em>';
 					return;
 				}
+				latestEstimateResults = results.slice();
 				var rows = results.map(function(row){
 					var agreementText = row.agreement_description || row.agreement_name || row.agreement_id || '—';
 					if (row.agreement_number) {
@@ -780,7 +925,7 @@ class LP_Cargonizer_Connector {
 						'<td>'+esc((row.discount_percent !== undefined ? row.discount_percent : 0) + '%')+'</td>' +
 						'<td>'+esc(row.discounted_price || '—')+'</td>' +
 						'<td>'+esc(row.status || 'unknown')+'</td>' +
-						'<td style="color:'+(row.error ? '#b32d2e' : '#2271b1')+';">'+esc(row.error || 'OK')+'</td>' +
+						'<td>'+renderServicepartnerControls(row)+'</td>' +
 					'</tr>';
 				}).join('');
 				resultsContent.innerHTML = '<table class="widefat striped"><thead><tr><th>Fraktmetode / produkt</th><th>Transportør / provider</th><th>ID</th><th>Originalpris</th><th>Rabatt</th><th>Rabattert pris</th><th>Status</th><th>Melding</th></tr></thead><tbody>'+rows+'</tbody></table>';
@@ -878,6 +1023,36 @@ class LP_Cargonizer_Connector {
 			addBtn.addEventListener('click', function(){ createColli({}); });
 			runEstimateBtn.addEventListener('click', runEstimate);
 
+
+			resultsContent.addEventListener('click', function(e){
+				var refreshBtn = e.target.closest('.lp-servicepartner-refresh');
+				if (refreshBtn) {
+					e.preventDefault();
+					fetchServicepartnersForMethod(refreshBtn.getAttribute('data-method-key') || '');
+					return;
+				}
+				var retryBtn = e.target.closest('.lp-servicepartner-retry');
+				if (retryBtn) {
+					e.preventDefault();
+					var methodKey = retryBtn.getAttribute('data-method-key') || '';
+					var select = resultsContent.querySelector('.lp-servicepartner-select[data-method-key="'+methodKey+'"]');
+					var selectedServicepartner = select ? (select.value || '') : '';
+					runEstimateForSingleMethod(methodKey, selectedServicepartner);
+				}
+			});
+
+			resultsContent.addEventListener('change', function(e){
+				var select = e.target.closest('.lp-servicepartner-select');
+				if (!select) { return; }
+				var methodKey = select.getAttribute('data-method-key') || '';
+				latestEstimateResults = latestEstimateResults.map(function(row){
+					if (methodKeyForRow(row) === methodKey) {
+						row.selected_servicepartner = select.value || '';
+					}
+					return row;
+				});
+			});
+
 			document.addEventListener('click', function(e){
 				var btn = e.target.closest('.lp-cargonizer-estimate-open');
 				if (!btn) { return; }
@@ -889,6 +1064,7 @@ class LP_Cargonizer_Connector {
 				content.style.display = 'none';
 				colliList.innerHTML = '';
 				colliValidation.style.display = 'none';
+				latestEstimateResults = [];
 				resultsContent.innerHTML = 'Ingen estimater kjørt enda.';
 				shippingOptionsList.innerHTML = '<em>Laster fraktvalg...</em>';
 
@@ -1059,12 +1235,16 @@ class LP_Cargonizer_Connector {
 	private function build_estimate_request_xml($payload, $method) {
 		$recipient = isset($payload['recipient']) && is_array($payload['recipient']) ? $payload['recipient'] : array();
 		$packages = isset($payload['packages']) && is_array($payload['packages']) ? $payload['packages'] : array();
+		$servicepartner = isset($payload['servicepartner']) ? sanitize_text_field((string) $payload['servicepartner']) : '';
 		$package_count = count($packages);
 
 		$xml = new SimpleXMLElement('<consignments/>');
 		$consignment = $xml->addChild('consignment');
 		$consignment->addAttribute('transport_agreement', isset($method['agreement_id']) ? (string) $method['agreement_id'] : '');
 		$consignment->addChild('product', esc_html(isset($method['product_id']) ? $method['product_id'] : ''));
+		if ($servicepartner !== '') {
+			$consignment->addChild('servicepartner', esc_html($servicepartner));
+		}
 		$consignment->addChild('number_of_packages', (string) max(1, $package_count));
 
 		$parts = $consignment->addChild('parts');
@@ -1098,6 +1278,115 @@ class LP_Cargonizer_Connector {
 		}
 
 		return $xml->asXML();
+	}
+
+
+	private function estimate_requires_servicepartner($error_message) {
+		$error_message = strtolower(trim((string) $error_message));
+		if ($error_message === '') {
+			return false;
+		}
+
+		$needles = array(
+			'servicepartner må angis',
+			'servicepartner maa angis',
+			'servicepartner must be specified',
+			'missing servicepartner',
+		);
+
+		foreach ($needles as $needle) {
+			if (strpos($error_message, $needle) !== false) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	private function fetch_servicepartner_options($method) {
+		$agreement_id = isset($method['agreement_id']) ? sanitize_text_field((string) $method['agreement_id']) : '';
+		$product_id = isset($method['product_id']) ? sanitize_text_field((string) $method['product_id']) : '';
+
+		if ($agreement_id === '' || $product_id === '') {
+			return array();
+		}
+
+		$request_url = add_query_arg(array(
+			'transport_agreement' => $agreement_id,
+			'product' => $product_id,
+		), 'https://api.cargonizer.no/servicepartners.xml');
+
+		$response = wp_remote_get($request_url, array(
+			'timeout' => 30,
+			'headers' => $this->get_auth_headers(),
+		));
+
+		if (is_wp_error($response)) {
+			return array();
+		}
+
+		$status = wp_remote_retrieve_response_code($response);
+		$body = wp_remote_retrieve_body($response);
+		if ($status < 200 || $status >= 300 || $body === '') {
+			return array();
+		}
+
+		libxml_use_internal_errors(true);
+		$xml = simplexml_load_string($body);
+		if ($xml === false) {
+			libxml_clear_errors();
+			return array();
+		}
+
+		$options = array();
+		$nodes = $xml->xpath('//servicepartner') ?: array();
+		foreach ($nodes as $node) {
+			$value = trim((string) $this->xml_value($node, array('id', 'code', 'number', 'value')));
+			$label = trim((string) $this->xml_value($node, array('name', 'title', 'description', 'display_name')));
+			if ($value === '') {
+				continue;
+			}
+			if ($label === '') {
+				$label = $value;
+			}
+			$options[] = array('value' => $value, 'label' => $label);
+		}
+
+		if (empty($options)) {
+			$fallback_nodes = $xml->xpath('//option') ?: array();
+			foreach ($fallback_nodes as $node) {
+				$value = trim((string) $this->xml_value($node, array('id', 'code', 'value')));
+				$label = trim((string) $this->xml_value($node, array('name', 'title', 'label')));
+				if ($value === '') {
+					continue;
+				}
+				if ($label === '') {
+					$label = $value;
+				}
+				$options[] = array('value' => $value, 'label' => $label);
+			}
+		}
+
+		return $options;
+	}
+
+	public function ajax_get_servicepartner_options() {
+		if (!current_user_can('manage_woocommerce')) {
+			wp_send_json_error(array('message' => 'Ingen tilgang.'), 403);
+		}
+
+		$nonce = isset($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : '';
+		if (!wp_verify_nonce($nonce, self::NONCE_ACTION_SERVICEPARTNERS)) {
+			wp_send_json_error(array('message' => 'Ugyldig nonce.'), 403);
+		}
+
+		$method = array(
+			'agreement_id' => isset($_POST['agreement_id']) ? sanitize_text_field(wp_unslash($_POST['agreement_id'])) : '',
+			'product_id' => isset($_POST['product_id']) ? sanitize_text_field(wp_unslash($_POST['product_id'])) : '',
+		);
+
+		$options = $this->fetch_servicepartner_options($method);
+		wp_send_json_success(array('options' => $options));
 	}
 
 	private function parse_response_error_message($body) {
@@ -1233,6 +1522,7 @@ class LP_Cargonizer_Connector {
 				'carrier_name' => isset($method['carrier_name']) ? sanitize_text_field($method['carrier_name']) : '',
 				'product_id' => isset($method['product_id']) ? sanitize_text_field($method['product_id']) : '',
 				'product_name' => isset($method['product_name']) ? sanitize_text_field($method['product_name']) : '',
+				'servicepartner' => isset($method['servicepartner']) ? sanitize_text_field($method['servicepartner']) : '',
 			);
 			$method_key = implode('|', array($method_payload['agreement_id'], $method_payload['product_id']));
 			if (!isset($enabled_map[$method_key])) {
@@ -1243,6 +1533,7 @@ class LP_Cargonizer_Connector {
 			$xml = $this->build_estimate_request_xml(array(
 				'recipient' => $recipient,
 				'packages' => $clean_packages,
+				'servicepartner' => $method_payload['servicepartner'],
 			), $method_payload);
 
 			$response = wp_remote_post('https://api.cargonizer.no/consignment_costs.xml', array(
@@ -1262,6 +1553,9 @@ class LP_Cargonizer_Connector {
 				'carrier_id' => $method_payload['carrier_id'],
 				'carrier_name' => $method_payload['carrier_name'],
 				'product_id' => $method_payload['product_id'],
+				'selected_servicepartner' => $method_payload['servicepartner'],
+				'requires_servicepartner' => false,
+				'servicepartner_options' => array(),
 				'estimated_price' => '',
 				'original_price' => '',
 				'discount_percent' => $discount_percent,
@@ -1286,6 +1580,10 @@ class LP_Cargonizer_Connector {
 				$response_message = $this->parse_response_error_message($body);
 				if ($response_message !== '') {
 					$item['error'] .= ': ' . $response_message;
+				}
+				if ($this->estimate_requires_servicepartner($item['error'])) {
+					$item['requires_servicepartner'] = true;
+					$item['servicepartner_options'] = $this->fetch_servicepartner_options($method_payload);
 				}
 				$results[] = $item;
 				continue;
