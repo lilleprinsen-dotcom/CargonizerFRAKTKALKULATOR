@@ -253,8 +253,31 @@ class LP_Cargonizer_Connector {
 		return '';
 	}
 
+	private function is_single_order_edit_screen() {
+		global $pagenow;
+
+		if ($pagenow !== 'post.php') {
+			return false;
+		}
+
+		if (isset($_GET['post']) && absint($_GET['post']) > 0 && get_post_type(absint($_GET['post'])) !== 'shop_order') {
+			return false;
+		}
+
+		$screen = function_exists('get_current_screen') ? get_current_screen() : null;
+		if (!$screen || strpos((string) $screen->id, 'shop_order') === false) {
+			return false;
+		}
+
+		return true;
+	}
+
 	public function render_order_estimate_button($order) {
 		if (!current_user_can('manage_woocommerce')) {
+			return;
+		}
+
+		if (!$this->is_single_order_edit_screen()) {
 			return;
 		}
 
@@ -270,8 +293,7 @@ class LP_Cargonizer_Connector {
 			return;
 		}
 
-		$screen = function_exists('get_current_screen') ? get_current_screen() : null;
-		if (!$screen || strpos((string) $screen->id, 'shop_order') === false) {
+		if (!$this->is_single_order_edit_screen()) {
 			return;
 		}
 		?>
