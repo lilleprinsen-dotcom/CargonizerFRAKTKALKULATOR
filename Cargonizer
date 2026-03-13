@@ -1298,33 +1298,21 @@ class LP_Cargonizer_Connector {
 				});
 
 				function renderOkRow(row){
-					var basePriceText = row.base_price !== '' && row.base_price !== undefined ? row.base_price : (row.selected_price_value || '—');
-					var discountPercentText = row.discount_percent !== '' && row.discount_percent !== undefined ? row.discount_percent : '—';
-					var discountedBaseText = row.discounted_base !== '' && row.discounted_base !== undefined ? row.discounted_base : '—';
-					var fuelSurchargeText = row.fuel_surcharge !== '' && row.fuel_surcharge !== undefined ? row.fuel_surcharge : '—';
-					var tollSurchargeText = row.toll_surcharge !== '' && row.toll_surcharge !== undefined ? row.toll_surcharge : '—';
-					var handlingFeeText = row.handling_fee !== '' && row.handling_fee !== undefined ? row.handling_fee : '—';
-					var inclVatText = row.price_incl_vat !== '' && row.price_incl_vat !== undefined ? row.price_incl_vat : '—';
-					var roundedText = row.rounded_price !== '' && row.rounded_price !== undefined ? row.rounded_price : '—';
-					var finalExVatText = row.final_price_ex_vat !== '' && row.final_price_ex_vat !== undefined ? row.final_price_ex_vat : '—';
-					var statusText = row.status || 'unknown';
-					var priceFieldText = row.selected_price_source || row.price_source_config || '—';
-					if (row.price_source_fallback_used && row.price_source_config) {
-						priceFieldText += ' (fallback fra ' + row.price_source_config + ')';
+					var priceText = '—';
+					if (row.rounded_price !== '' && row.rounded_price !== undefined) {
+						priceText = row.rounded_price;
+					} else if (row.final_price_ex_vat !== '' && row.final_price_ex_vat !== undefined) {
+						priceText = row.final_price_ex_vat;
+					} else if (row.price_incl_vat !== '' && row.price_incl_vat !== undefined) {
+						priceText = row.price_incl_vat;
+					} else if (row.discounted_base !== '' && row.discounted_base !== undefined) {
+						priceText = row.discounted_base;
 					}
+					var statusText = row.status || 'unknown';
 					return '<tr>' +
 						'<td>'+esc(row.method_name || row.product_id || 'Ukjent metode')+'</td>' +
 						'<td>'+esc((row.carrier_name || '—') + (row.carrier_id ? ' (' + row.carrier_id + ')' : ''))+'</td>' +
-						'<td>'+esc(priceFieldText)+'</td>' +
-						'<td>'+esc(basePriceText)+'</td>' +
-						'<td>'+esc(discountPercentText)+'</td>' +
-						'<td>'+esc(discountedBaseText)+'</td>' +
-						'<td>'+esc(fuelSurchargeText)+'</td>' +
-						'<td>'+esc(tollSurchargeText)+'</td>' +
-						'<td>'+esc(handlingFeeText)+'</td>' +
-						'<td>'+esc(inclVatText)+'</td>' +
-						'<td>'+esc(roundedText)+'</td>' +
-						'<td>'+esc(finalExVatText)+'</td>' +
+						'<td>'+esc(priceText)+'</td>' +
 						'<td>'+esc(statusText)+'</td>' +
 					'</tr>';
 				}
@@ -1348,8 +1336,8 @@ class LP_Cargonizer_Connector {
 				}
 
 				var okRows = okResults.map(renderOkRow).join('');
-				var okTableHtml = '<table class="widefat striped"><thead><tr><th>Fraktmetode</th><th>Transportør</th><th>Prisfelt brukt</th><th>Grunnpris</th><th>Rabatt %</th><th>Pris etter rabatt</th><th>Drivstofftillegg</th><th>Bomtillegg</th><th>Håndteringstillegg</th><th>Pris inkl. mva</th><th>Avrundet pris</th><th>Sluttpris eks. mva</th><th>Status</th></tr></thead><tbody>' +
-					(okRows || '<tr><td colspan="13"><em>Ingen vellykkede metoder.</em></td></tr>') +
+				var okTableHtml = '<table class="widefat striped"><thead><tr><th>Fraktmetode</th><th>Transportør</th><th>Pris</th><th>Status</th></tr></thead><tbody>' +
+					(okRows || '<tr><td colspan="4"><em>Ingen vellykkede metoder.</em></td></tr>') +
 					'</tbody></table>';
 
 				var failedSectionHtml = '';
