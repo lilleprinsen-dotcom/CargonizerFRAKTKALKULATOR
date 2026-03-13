@@ -1057,6 +1057,10 @@ class LP_Cargonizer_Connector {
 					'Alternative prisfelt i respons: ' + (alternatives.length ? alternatives.join(', ') : 'ingen'),
 					'price_source_config: ' + (row.price_source_config || '—'),
 					'selected_price_source: ' + (row.selected_price_source || '—'),
+					'selected_price_value: ' + (row.selected_price_value || '—'),
+					'price_source_fallback_used: ' + (row.price_source_fallback_used ? 'ja' : 'nei'),
+					'price_source_fallback_reason: ' + (row.price_source_fallback_reason || '—'),
+					'rounding_mode: ' + (row.rounding_mode || '—'),
 					'base_price: ' + (row.base_price || '—'),
 					'fixed_addition: ' + (row.fixed_addition || '—'),
 					'percentage_addition: ' + (row.percentage_addition || '—'),
@@ -1068,6 +1072,7 @@ class LP_Cargonizer_Connector {
 					'gross_amount: ' + (row.gross_amount || '—'),
 					'net_amount: ' + (row.net_amount || '—'),
 					'fallback_price: ' + (row.fallback_price || '—'),
+					'legacy_fields_note: ' + (row.legacy_fields_note || '—'),
 					'Agreement: ' + (summary.agreement_id || row.agreement_id || '—'),
 					'Produkt: ' + (summary.product_id || row.product_id || '—'),
 					'Kolli: ' + (summary.number_of_packages !== undefined ? summary.number_of_packages : '—'),
@@ -1291,9 +1296,12 @@ class LP_Cargonizer_Connector {
 					var percentageAdditionText = row.percentage_addition !== '' && row.percentage_addition !== undefined ? row.percentage_addition + '%' : '—';
 					var inclVatText = row.price_incl_vat !== '' && row.price_incl_vat !== undefined ? row.price_incl_vat : '—';
 					var roundedText = row.rounded_price !== '' && row.rounded_price !== undefined ? row.rounded_price : '—';
-					var finalExVatText = row.final_price_ex_vat !== '' && row.final_price_ex_vat !== undefined ? row.final_price_ex_vat : '—';
+					var finalExVatText = row.final_price_ex_vat !== '' && row.final_price_ex_vat !== undefined ? row.final_price_ex_vat : (row.discounted_price || '—');
 					var statusText = row.status || 'unknown';
 					var priceFieldText = row.selected_price_source || row.price_source_config || '—';
+					if (row.price_source_fallback_used && row.price_source_config) {
+						priceFieldText += ' (fallback fra ' + row.price_source_config + ')';
+					}
 					return '<tr>' +
 						'<td>'+esc(row.method_name || 'Ukjent metode')+'</td>' +
 						'<td>'+esc((row.carrier_name || '—') + (row.carrier_id ? ' (' + row.carrier_id + ')' : ''))+'</td>' +
@@ -2111,38 +2119,100 @@ class LP_Cargonizer_Connector {
 		$selected = array(
 			'source' => '',
 			'value' => '',
+			'configured_source' => $this->sanitize_price_source($configured_source),
+			'configured_key' => '',
+			'fallback_priority' => array(),
+			'used_fallback' => false,
 		);
 
 		if (!is_array($price_fields)) {
 			return $selected;
 		}
 
+		$priority_data = $this->get_price_source_priority($selected['configured_source']);
+		$selected['configured_key'] = $priority_data['configured_key'];
+		$selected['fallback_priority'] = $priority_data['priority'];
+
+		foreach ($priority_data['priority'] as $source) {
+			$value = isset($price_fields[$source]) ? trim((string) $price_fields[$source]) : '';
+			if ($value !== '') {
+				$selected['source'] = $source;
+				$selected['value'] = $value;
+				$selected['used_fallback'] = $source !== $priority_data['configured_key'];
+				return $selected;
+			}
+		}
+
+		$selected['used_fallback'] = true;
+		return $selected;
+	}
+
+	private function get_price_source_priority($configured_source = 'estimated') {
 		$source_map = array(
 			'net' => 'net_amount',
 			'gross' => 'gross_amount',
 			'estimated' => 'estimated_cost',
 			'fallback' => 'fallback_price',
 		);
+
 		$configured = $this->sanitize_price_source($configured_source);
-		$primary_key = isset($source_map[$configured]) ? $source_map[$configured] : 'estimated_cost';
-		$primary_value = isset($price_fields[$primary_key]) ? trim((string) $price_fields[$primary_key]) : '';
-		if ($primary_value !== '') {
-			$selected['source'] = $primary_key;
-			$selected['value'] = $primary_value;
-			return $selected;
+		$configured_key = isset($source_map[$configured]) ? $source_map[$configured] : 'estimated_cost';
+
+		// Fallback-prioriteten er eksplisitt for enklere feilsøking og mer forutsigbar prisvisning.
+		$priority = array($configured_key, 'net_amount', 'gross_amount', 'estimated_cost', 'fallback_price');
+		$priority = array_values(array_unique($priority));
+
+		return array(
+			'configured_source' => $configured,
+			'configured_key' => $configured_key,
+			'priority' => $priority,
+		);
+	}
+
+	private function calculate_estimate_from_price_source($selected_price, $pricing_config) {
+		$result = array(
+			'status' => 'unknown',
+			'error' => '',
+			'base_price' => '',
+			'adjusted_price' => '',
+			'price_incl_vat' => '',
+			'rounded_price' => '',
+			'final_price_ex_vat' => '',
+		);
+
+		$source = isset($selected_price['source']) ? (string) $selected_price['source'] : '';
+		$value = isset($selected_price['value']) ? (string) $selected_price['value'] : '';
+
+		if ($value === '') {
+			$result['error'] = 'Fikk svar, men fant ingen prisfelt (net_amount, gross_amount, estimated_cost eller fallback_price) i responsen.';
+			return $result;
 		}
 
-		$priority = array('net_amount', 'gross_amount', 'estimated_cost', 'fallback_price');
-		foreach ($priority as $source) {
-			$value = isset($price_fields[$source]) ? trim((string) $price_fields[$source]) : '';
-			if ($value !== '') {
-				$selected['source'] = $source;
-				$selected['value'] = $value;
-				return $selected;
-			}
+		$base_price = $this->parse_price_to_number($value);
+		if ($base_price === null) {
+			$result['status'] = 'price_parse_failed';
+			$result['error'] = 'Kunne ikke tolke valgt prisfelt (' . $source . ') som et tall. Viser kun original respons.';
+			return $result;
 		}
 
-		return $selected;
+		$fixed_addition = isset($pricing_config['fixed_addition']) ? (float) $pricing_config['fixed_addition'] : 0;
+		$percentage_addition = isset($pricing_config['percentage_addition']) ? (float) $pricing_config['percentage_addition'] : 0;
+		$vat_percent = isset($pricing_config['vat_percent']) ? (float) $pricing_config['vat_percent'] : 0;
+		$rounding_mode = isset($pricing_config['rounding_mode']) ? $this->sanitize_rounding_mode($pricing_config['rounding_mode']) : 'none';
+
+		$adjusted_price = $base_price + $fixed_addition + ($base_price * $percentage_addition / 100);
+		$price_incl_vat = $adjusted_price * (1 + ($vat_percent / 100));
+		$rounded_price = $this->apply_rounding_mode($price_incl_vat, $rounding_mode);
+		$final_price_ex_vat = $vat_percent > 0 ? ($rounded_price / (1 + ($vat_percent / 100))) : $rounded_price;
+
+		$result['status'] = 'ok';
+		$result['base_price'] = number_format($base_price, 2, '.', '');
+		$result['adjusted_price'] = number_format($adjusted_price, 2, '.', '');
+		$result['price_incl_vat'] = number_format($price_incl_vat, 2, '.', '');
+		$result['rounded_price'] = number_format($rounded_price, 2, '.', '');
+		$result['final_price_ex_vat'] = number_format($final_price_ex_vat, 2, '.', '');
+
+		return $result;
 	}
 
 	private function parse_estimated_price($body) {
@@ -2276,6 +2346,9 @@ class LP_Cargonizer_Connector {
 				'fallback_price' => '',
 				'selected_price_source' => '',
 				'selected_price_value' => '',
+				'price_source_fallback_used' => false,
+				'price_source_fallback_reason' => '',
+				'price_source_priority' => array(),
 				'original_price' => '',
 				'discount_percent' => $discount_percent,
 				'fuel_type' => isset($pricing_config['fuel_type']) ? $pricing_config['fuel_type'] : 'fixed',
@@ -2289,6 +2362,8 @@ class LP_Cargonizer_Connector {
 				'discounted_base' => '',
 				'negative_base_clamped' => false,
 				'discounted_price' => '',
+				'legacy_fields' => array(),
+				'legacy_fields_note' => 'Legacy-felter beholdes kun for bakoverkompatibilitet mot eksisterende UI.',
 				'price_source_config' => isset($pricing_config['price_source']) ? $pricing_config['price_source'] : 'estimated',
 				'fixed_addition' => isset($pricing_config['fixed_addition']) ? $pricing_config['fixed_addition'] : 0,
 				'percentage_addition' => isset($pricing_config['percentage_addition']) ? $pricing_config['percentage_addition'] : 0,
@@ -2389,41 +2464,43 @@ class LP_Cargonizer_Connector {
 			$selected_price = $this->select_estimate_price_value($price_fields, $item['price_source_config']);
 			$item['selected_price_source'] = $selected_price['source'];
 			$item['selected_price_value'] = $selected_price['value'];
+			$item['price_source_fallback_used'] = !empty($selected_price['used_fallback']);
+			$item['price_source_priority'] = isset($selected_price['fallback_priority']) ? $selected_price['fallback_priority'] : array();
+			if ($item['price_source_fallback_used']) {
+				$item['price_source_fallback_reason'] = 'Konfigurert kilde (' . (isset($selected_price['configured_key']) ? $selected_price['configured_key'] : 'ukjent') . ') manglet eller var tom. Brukte ' . ($selected_price['source'] !== '' ? $selected_price['source'] : 'ingen kilde') . '.';
+			}
 			$item['estimated_price'] = $selected_price['value'];
 			$item['original_price'] = $selected_price['value'];
-			$item['status'] = $selected_price['value'] !== '' ? 'ok' : 'unknown';
-			if ($item['status'] === 'unknown') {
-				$item['error'] = 'Fikk svar, men fant ingen prisfelt (net_amount, gross_amount, estimated_cost eller fallback_price) i responsen.';
-				$item['parsed_error_message'] = $this->parse_response_error_message($body);
-			} else {
-				$base_price = $this->parse_price_to_number($selected_price['value']);
-				if ($base_price === null) {
-					$item['status'] = 'price_parse_failed';
-					$item['error'] = 'Kunne ikke tolke valgt prisfelt (' . $selected_price['source'] . ') som et tall. Viser kun original respons.';
-				} else {
-					$fixed_addition = (float) $item['fixed_addition'];
-					$percentage_addition = (float) $item['percentage_addition'];
-					$vat_percent = (float) $item['vat_percent'];
 
-					$adjusted_price = $base_price + $fixed_addition + ($base_price * $percentage_addition / 100);
-					$price_incl_vat = $adjusted_price * (1 + ($vat_percent / 100));
-					$rounded_price = $this->apply_rounding_mode($price_incl_vat, $item['rounding_mode']);
-					$final_price_ex_vat = $vat_percent > 0 ? ($rounded_price / (1 + ($vat_percent / 100))) : $rounded_price;
-
-					$item['base_price'] = number_format($base_price, 2, '.', '');
-					$item['adjusted_price'] = number_format($adjusted_price, 2, '.', '');
-					$item['price_incl_vat'] = number_format($price_incl_vat, 2, '.', '');
-					$item['rounded_price'] = number_format($rounded_price, 2, '.', '');
-					$item['final_price_ex_vat'] = number_format($final_price_ex_vat, 2, '.', '');
-
-					// Behold gamle debug-felt for kompatibilitet mot eksisterende UI.
-					$item['fuel_amount'] = number_format($fixed_addition, 2, '.', '');
-					$item['toll_amount'] = number_format(0, 2, '.', '');
-					$item['discount_basis'] = number_format($base_price, 2, '.', '');
-					$item['discounted_base'] = number_format($adjusted_price, 2, '.', '');
-					$item['negative_base_clamped'] = false;
-					$item['discounted_price'] = number_format($final_price_ex_vat, 2, '.', '');
+			$calculated = $this->calculate_estimate_from_price_source($selected_price, $item);
+			$item['status'] = $calculated['status'];
+			if ($calculated['error'] !== '') {
+				$item['error'] = $calculated['error'];
+				if ($item['status'] === 'unknown') {
+					$item['parsed_error_message'] = $this->parse_response_error_message($body);
 				}
+			} else {
+				$item['base_price'] = $calculated['base_price'];
+				$item['adjusted_price'] = $calculated['adjusted_price'];
+				$item['price_incl_vat'] = $calculated['price_incl_vat'];
+				$item['rounded_price'] = $calculated['rounded_price'];
+				$item['final_price_ex_vat'] = $calculated['final_price_ex_vat'];
+
+				$fixed_addition = (float) $item['fixed_addition'];
+				// Legacy-felter beholdes kun for bakoverkompatibilitet. Ikke del av ny prismodell.
+				$item['fuel_amount'] = number_format($fixed_addition, 2, '.', '');
+				$item['toll_amount'] = number_format(0, 2, '.', '');
+				$item['discount_basis'] = $calculated['base_price'];
+				$item['discounted_base'] = $calculated['adjusted_price'];
+				$item['negative_base_clamped'] = false;
+				$item['discounted_price'] = $calculated['final_price_ex_vat'];
+				$item['legacy_fields'] = array(
+					'fuel_amount' => $item['fuel_amount'],
+					'toll_amount' => $item['toll_amount'],
+					'discount_basis' => $item['discount_basis'],
+					'discounted_base' => $item['discounted_base'],
+					'discounted_price' => $item['discounted_price'],
+				);
 			}
 
 			$results[] = $item;
