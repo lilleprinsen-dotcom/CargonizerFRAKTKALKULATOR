@@ -153,13 +153,13 @@ class LP_Cargonizer_Connector {
 				? $this->sanitize_discount_percent($pricing['discount_percent'])
 				: (isset($output['method_discounts'][$clean_key]) ? $output['method_discounts'][$clean_key] : 0);
 
-			$fuel_surcharge = $this->sanitize_non_negative_number(isset($pricing['fuel_surcharge']) ? $pricing['fuel_surcharge'] : 0);
+			$fuel_percent = $this->sanitize_non_negative_number(isset($pricing['fuel_surcharge']) ? $pricing['fuel_surcharge'] : 0);
 			$toll_surcharge = $this->sanitize_non_negative_number(isset($pricing['toll_surcharge']) ? $pricing['toll_surcharge'] : 0);
 			$handling_fee = $this->sanitize_non_negative_number(isset($pricing['handling_fee']) ? $pricing['handling_fee'] : 0);
 
 			$output['method_pricing'][$clean_key] = array(
 				'discount_percent' => $discount_percent,
-				'fuel_surcharge' => $fuel_surcharge,
+				'fuel_surcharge' => $fuel_percent,
 				'toll_surcharge' => $toll_surcharge,
 				'handling_fee' => $handling_fee,
 				'price_source' => $this->sanitize_price_source(isset($pricing['price_source']) ? $pricing['price_source'] : 'estimated'),
@@ -475,7 +475,7 @@ class LP_Cargonizer_Connector {
 			$price_source = isset($raw['price_source'])
 				? $this->sanitize_price_source($raw['price_source'])
 				: 'estimated';
-			$fuel_surcharge = isset($raw['fuel_surcharge'])
+			$fuel_percent = isset($raw['fuel_surcharge'])
 				? $this->sanitize_non_negative_number($raw['fuel_surcharge'])
 				: 0;
 			$toll_surcharge = isset($raw['toll_surcharge'])
@@ -487,7 +487,7 @@ class LP_Cargonizer_Connector {
 
 			$result[$method_key] = array(
 				'discount_percent' => isset($raw['discount_percent']) ? $this->sanitize_discount_percent($raw['discount_percent']) : $default['discount_percent'],
-				'fuel_surcharge' => round($fuel_surcharge, 2),
+				'fuel_surcharge' => round($fuel_percent, 2),
 				'toll_surcharge' => round($toll_surcharge, 2),
 				'handling_fee' => round($handling_fee, 2),
 				'price_source' => $price_source,
@@ -1066,7 +1066,8 @@ class LP_Cargonizer_Connector {
 					'base_price: ' + (row.base_price || '—'),
 					'discount_percent: ' + (row.discount_percent || '—'),
 					'discounted_base: ' + (row.discounted_base || '—'),
-					'fuel_surcharge: ' + (row.fuel_surcharge || '—'),
+					'fuel_percent: ' + (row.fuel_surcharge || '—') + '%',
+					'recalculated_fuel_surcharge: ' + (row.recalculated_fuel_surcharge || '—'),
 					'toll_surcharge: ' + (row.toll_surcharge || '—'),
 					'handling_fee: ' + (row.handling_fee || '—'),
 					'manual_handling_fee: ' + (row.manual_handling_fee || '—'),
@@ -1308,7 +1309,7 @@ class LP_Cargonizer_Connector {
 					var basePriceText = row.base_price !== '' && row.base_price !== undefined ? row.base_price : (row.selected_price_value || '—');
 					var discountPercentText = row.discount_percent !== '' && row.discount_percent !== undefined ? row.discount_percent : '—';
 					var discountedBaseText = row.discounted_base !== '' && row.discounted_base !== undefined ? row.discounted_base : '—';
-					var fuelSurchargeText = row.fuel_surcharge !== '' && row.fuel_surcharge !== undefined ? row.fuel_surcharge : '—';
+					var fuelPercentText = row.fuel_surcharge !== '' && row.fuel_surcharge !== undefined ? row.fuel_surcharge : '—';
 					var tollSurchargeText = row.toll_surcharge !== '' && row.toll_surcharge !== undefined ? row.toll_surcharge : '—';
 					var handlingFeeText = row.handling_fee !== '' && row.handling_fee !== undefined ? row.handling_fee : '—';
 					var actualPriceText = row.rounded_price !== '' && row.rounded_price !== undefined
@@ -1321,7 +1322,7 @@ class LP_Cargonizer_Connector {
 						'<td>'+esc(basePriceText)+'</td>' +
 						'<td>'+esc(discountPercentText)+'</td>' +
 						'<td>'+esc(discountedBaseText)+'</td>' +
-						'<td>'+esc(fuelSurchargeText)+'</td>' +
+						'<td>'+esc(fuelPercentText)+'</td>' +
 						'<td>'+esc(tollSurchargeText)+'</td>' +
 						'<td>'+esc(handlingFeeText)+'</td>' +
 						'<td>'+esc(actualPriceText)+'</td>' +
@@ -1348,7 +1349,7 @@ class LP_Cargonizer_Connector {
 				}
 
 				var okRows = okResults.map(renderOkRow).join('');
-				var okTableHtml = '<table class="widefat striped"><thead><tr><th>Fraktmetode</th><th>Transportør</th><th>Grunnpris</th><th>Rabatt %</th><th>Pris etter rabatt</th><th>Drivstofftillegg</th><th>Bomtillegg</th><th>Håndteringstillegg</th><th>Faktisk pris</th><th>Status</th></tr></thead><tbody>' +
+				var okTableHtml = '<table class="widefat striped"><thead><tr><th>Fraktmetode</th><th>Transportør</th><th>Grunnpris</th><th>Rabatt %</th><th>Pris etter rabatt</th><th>Drivstofftillegg (%)</th><th>Bomtillegg</th><th>Håndteringstillegg</th><th>Faktisk pris</th><th>Status</th></tr></thead><tbody>' +
 					(okRows || '<tr><td colspan="10"><em>Ingen vellykkede metoder.</em></td></tr>') +
 					'</tbody></table>';
 
@@ -2431,7 +2432,8 @@ class LP_Cargonizer_Connector {
 		$result['base_price'] = number_format($extracted_base_freight, 2, '.', '');
 		$result['discount_percent'] = number_format($discount_percent, 2, '.', '');
 		$result['discounted_base'] = number_format($discounted_base_freight, 2, '.', '');
-		$result['fuel_surcharge'] = number_format($recalculated_fuel_surcharge, 2, '.', '');
+		// Behold historisk nøkkelnavn for bakoverkompatibilitet, men verdien er prosentsats.
+		$result['fuel_surcharge'] = number_format($fuel_percent, 2, '.', '');
 		$result['toll_surcharge'] = number_format($extracted_toll_surcharge, 2, '.', '');
 		$result['handling_fee'] = number_format($total_handling_fee, 2, '.', '');
 		$result['subtotal_ex_vat'] = number_format($subtotal_ex_vat, 2, '.', '');
@@ -2904,7 +2906,7 @@ class LP_Cargonizer_Connector {
 										$pricing = isset($method_pricing[$method_key]) && is_array($method_pricing[$method_key]) ? $method_pricing[$method_key] : array();
 										$discount_value = isset($pricing['discount_percent']) ? $this->sanitize_discount_percent($pricing['discount_percent']) : (isset($method_discounts[$method_key]) ? $this->sanitize_discount_percent($method_discounts[$method_key]) : 0);
 										$price_source = $this->sanitize_price_source(isset($pricing['price_source']) ? $pricing['price_source'] : 'estimated');
-										$fuel_surcharge = $this->sanitize_non_negative_number(isset($pricing['fuel_surcharge']) ? $pricing['fuel_surcharge'] : 0);
+										$fuel_percent = $this->sanitize_non_negative_number(isset($pricing['fuel_surcharge']) ? $pricing['fuel_surcharge'] : 0);
 										$toll_surcharge = $this->sanitize_non_negative_number(isset($pricing['toll_surcharge']) ? $pricing['toll_surcharge'] : 0);
 										$handling_fee = $this->sanitize_non_negative_number(isset($pricing['handling_fee']) ? $pricing['handling_fee'] : 0);
 										$vat_percent = $this->sanitize_non_negative_number(isset($pricing['vat_percent']) ? $pricing['vat_percent'] : 0);
@@ -2938,7 +2940,7 @@ class LP_Cargonizer_Connector {
 										</label>
 										<label style="display:flex;flex-direction:column;gap:4px;">
 											<span>Drivstofftillegg (%)</span><small style="color:#646970;">Prosent av grunnfrakt (brukes baklengs mot listepris).</small>
-											<input class="small-text lp-cargonizer-method-input" type="number" min="0" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][fuel_surcharge]" value="<?php echo esc_attr($fuel_surcharge); ?>" <?php disabled(!$is_enabled); ?>>
+													<input class="small-text lp-cargonizer-method-input" type="number" min="0" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][fuel_surcharge]" value="<?php echo esc_attr($fuel_percent); ?>" <?php disabled(!$is_enabled); ?>>
 										</label>
 										<label style="display:flex;flex-direction:column;gap:4px;">
 											<span>Bomtillegg (kr)</span><small style="color:#646970;">Fast kronepåslag.</small>
