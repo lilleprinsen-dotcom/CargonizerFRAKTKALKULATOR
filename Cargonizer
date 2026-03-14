@@ -1323,7 +1323,9 @@ class LP_Cargonizer_Connector {
 					var toText = function(value){
 						return value !== '' && value !== undefined && value !== null ? value : '—';
 					};
-					var basePriceText = row.base_price !== '' && row.base_price !== undefined ? row.base_price : (row.selected_price_value || '—');
+					var listPriceText = row.original_list_price !== '' && row.original_list_price !== undefined
+						? row.original_list_price
+						: (row.selected_price_value || '—');
 					var discountPercentText = toText(row.discount_percent);
 					var discountedBaseText = toText(row.discounted_base);
 					var fuelPercentText = toText(row.fuel_surcharge);
@@ -1338,7 +1340,7 @@ class LP_Cargonizer_Connector {
 					return '<tr>' +
 						'<td>'+esc(row.method_name || row.product_id || 'Ukjent metode')+'</td>' +
 						'<td>'+esc((row.carrier_name || '—') + (row.carrier_id ? ' (' + row.carrier_id + ')' : ''))+'</td>' +
-						'<td>'+esc(basePriceText)+'</td>' +
+						'<td>'+esc(listPriceText)+'</td>' +
 						'<td>'+esc(discountPercentText)+'</td>' +
 						'<td>'+esc(discountedBaseText)+'</td>' +
 						'<td>'+esc(fuelPercentText)+'</td>' +
