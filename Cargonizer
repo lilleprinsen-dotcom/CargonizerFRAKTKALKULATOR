@@ -1512,6 +1512,10 @@ class LP_Cargonizer_Connector {
 				return types.length ? types.join(' / ') : 'Ikke satt';
 			}
 
+			function formatDeliveryFlag(value){
+				return value ? 'Ja' : 'Nei';
+			}
+
 			function renderEstimateResults(results){
 				function parsePriceNumber(value) {
 					if (value === null || value === undefined || value === '') {
@@ -1581,13 +1585,14 @@ class LP_Cargonizer_Connector {
 						? row.rounded_price
 						: (row.final_price_ex_vat !== '' && row.final_price_ex_vat !== undefined ? row.final_price_ex_vat : '—');
 					var statusText = row.status || 'unknown';
-					var deliveryTypeText = formatDeliveryTypeText(row);
 					var packageSummaryHtml = renderManualNorgespakkeSummary(row, { compact: true, title: 'Kolli' });
 					var detailsHtml = '<details><summary>Vis beregning</summary>' + renderEstimateDebug(row, { asDetails: false }) + '</details>';
 					return '<tr>' +
-						'<td>'+esc(row.method_name || row.product_id || 'Ukjent metode')+'<div style="color:#646970;font-size:12px;margin-top:4px;">Levering: '+esc(deliveryTypeText)+'</div>' + packageSummaryHtml + '</td>' +
-						'<td>'+esc(listPriceText)+'</td>' +
-						'<td>'+esc(discountPercentText)+'</td>' +
+					'<td>'+esc(row.method_name || row.product_id || 'Ukjent metode') + packageSummaryHtml + '</td>' +
+					'<td>'+esc(formatDeliveryFlag(!!row.delivery_to_pickup_point))+'</td>' +
+					'<td>'+esc(formatDeliveryFlag(!!row.delivery_to_home))+'</td>' +
+					'<td>'+esc(listPriceText)+'</td>' +
+					'<td>'+esc(discountPercentText)+'</td>' +
 						'<td>'+esc(fuelPercentText)+'</td>' +
 						'<td>'+esc(fuelAmountText)+'</td>' +
 						'<td>'+esc(tollSurchargeText)+'</td>' +
@@ -1607,18 +1612,19 @@ class LP_Cargonizer_Connector {
 					if (row.human_error) { debugFields.push('Forklaring: ' + row.human_error); }
 					if (row.parsed_error_message && row.parsed_error_message !== row.error) { debugFields.push('Parsed: ' + row.parsed_error_message); }
 					var debugText = debugFields.length ? debugFields.join(' | ') : '—';
-					var deliveryTypeText = formatDeliveryTypeText(row);
 					return '<tr>' +
-						'<td>'+esc(row.method_name || row.product_id || 'Ukjent metode')+'<div style="color:#646970;font-size:12px;margin-top:4px;">Levering: '+esc(deliveryTypeText)+'</div></td>' +
-						'<td>'+esc(row.status || 'failed')+'</td>' +
-						'<td>'+esc(row.error || row.parsed_error_message || 'Ukjent feil')+'</td>' +
-						'<td>'+esc(debugText)+'</td>' +
-					'</tr>';
-				}
+					'<td>'+esc(row.method_name || row.product_id || 'Ukjent metode')+'</td>' +
+					'<td>'+esc(formatDeliveryFlag(!!row.delivery_to_pickup_point))+'</td>' +
+					'<td>'+esc(formatDeliveryFlag(!!row.delivery_to_home))+'</td>' +
+					'<td>'+esc(row.status || 'failed')+'</td>' +
+					'<td>'+esc(row.error || row.parsed_error_message || 'Ukjent feil')+'</td>' +
+					'<td>'+esc(debugText)+'</td>' +
+				'</tr>';
+			}
 
 				var okRows = okResults.map(renderOkRow).join('');
-				var okTableHtml = '<table class="widefat striped"><thead><tr><th>Fraktmetode</th><th>Listepris/grunnlag</th><th>Rabatt %</th><th>Drivstoff %</th><th>Drivstoff (kr)</th><th>Bomtillegg (kr)</th><th>Håndteringstillegg (kr)</th><th>Faktisk pris</th><th>Status</th><th>Beregning/debug</th></tr></thead><tbody>' +
-					(okRows || '<tr><td colspan="10"><em>Ingen vellykkede metoder.</em></td></tr>') +
+				var okTableHtml = '<table class="widefat striped"><thead><tr><th>Fraktmetode</th><th>Hentested</th><th>Hjemlevering</th><th>Listepris/grunnlag</th><th>Rabatt %</th><th>Drivstoff %</th><th>Drivstoff (kr)</th><th>Bomtillegg (kr)</th><th>Håndteringstillegg (kr)</th><th>Faktisk pris</th><th>Status</th><th>Beregning/debug</th></tr></thead><tbody>' +
+					(okRows || '<tr><td colspan="12"><em>Ingen vellykkede metoder.</em></td></tr>') +
 					'</tbody></table>';
 
 				var failedSectionHtml = '';
@@ -1626,7 +1632,7 @@ class LP_Cargonizer_Connector {
 					var failedRows = failedResults.map(renderFailedRow).join('');
 					failedSectionHtml = '<details style="margin-top:12px;"><summary>Vis metoder som feilet (' + failedResults.length + ')</summary>' +
 						'<div style="margin-top:8px;">' +
-						'<table class="widefat striped"><thead><tr><th>Fraktmetode</th><th>Status</th><th>Feilmelding</th><th>Debug/details</th></tr></thead><tbody>' + failedRows + '</tbody></table>' +
+						'<table class="widefat striped"><thead><tr><th>Fraktmetode</th><th>Hentested</th><th>Hjemlevering</th><th>Status</th><th>Feilmelding</th><th>Debug/details</th></tr></thead><tbody>' + failedRows + '</tbody></table>' +
 						'</div>' +
 					'</details>';
 				}
