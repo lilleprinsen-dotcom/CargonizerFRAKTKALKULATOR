@@ -93,6 +93,7 @@ class LP_Cargonizer_Connector {
 				'carrier_name' => isset($method['carrier_name']) ? sanitize_text_field((string) $method['carrier_name']) : '',
 				'product_id' => isset($method['product_id']) ? sanitize_text_field((string) $method['product_id']) : '',
 				'product_name' => isset($method['product_name']) ? sanitize_text_field((string) $method['product_name']) : '',
+				'is_manual' => !empty($method['is_manual']),
 				'label' => isset($method['label']) ? sanitize_text_field((string) $method['label']) : '',
 				'services' => array(),
 			);
@@ -428,20 +429,33 @@ class LP_Cargonizer_Connector {
 			$options = array();
 		}
 
+		$manual_norgespakke = $this->get_manual_norgespakke_method();
+		$updated_options = array();
 		$has_norgespakke = false;
+
 		foreach ($options as $option) {
+			if (!is_array($option)) {
+				$updated_options[] = $option;
+				continue;
+			}
+
 			$key = isset($option['key']) ? (string) $option['key'] : '';
-			if ($key === self::MANUAL_NORGESPAKKE_KEY) {
+			if ($key !== self::MANUAL_NORGESPAKKE_KEY) {
+				$updated_options[] = $option;
+				continue;
+			}
+
+			if (!$has_norgespakke) {
+				$updated_options[] = array_merge($option, $manual_norgespakke, array('services' => isset($option['services']) && is_array($option['services']) ? $option['services'] : array()));
 				$has_norgespakke = true;
-				break;
 			}
 		}
 
 		if (!$has_norgespakke) {
-			$options[] = $this->get_manual_norgespakke_method();
+			$updated_options[] = $manual_norgespakke;
 		}
 
-		return $options;
+		return $updated_options;
 	}
 
 	private function is_manual_norgespakke_method($method_payload) {
