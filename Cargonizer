@@ -1027,8 +1027,11 @@ class LP_Cargonizer_Connector {
 				return value.length > max ? (value.slice(0, max) + '...') : value;
 			}
 
-			function renderEstimateDebug(row){
+			function renderEstimateDebug(row, options){
 				if (!row) { return ''; }
+				var opts = options || {};
+				var asDetails = opts.asDetails !== false;
+				var summaryTitle = opts.summaryTitle || 'Debug';
 				var summary = row.request_summary || {};
 				var packages = Array.isArray(summary.packages) ? summary.packages : [];
 				var packageText = packages.map(function(pkg, idx){
@@ -1043,6 +1046,12 @@ class LP_Cargonizer_Connector {
 				if (row.gross_amount) { alternatives.push('gross_amount=' + row.gross_amount); }
 				if (row.estimated_cost) { alternatives.push('estimated_cost=' + row.estimated_cost); }
 				if (row.fallback_price) { alternatives.push('fallback_price=' + row.fallback_price); }
+				var formulaText = [
+					'base_freight = (list_price - total_handling_fee - toll_surcharge) / (1 + fuel_percent / 100)',
+					'discounted_base = base_freight * (1 - discount_percent / 100)',
+					'recalculated_fuel_surcharge = discounted_base * fuel_percent / 100',
+					'subtotal_ex_vat = discounted_base + recalculated_fuel_surcharge + toll_surcharge + total_handling_fee'
+				].join(' | ');
 				var fields = [
 					'HTTP: ' + (row.http_status || '—'),
 					'Error code: ' + (row.error_code || '—'),
@@ -1072,6 +1081,7 @@ class LP_Cargonizer_Connector {
 					'handling_fee: ' + (row.handling_fee || '—'),
 					'manual_handling_fee: ' + (row.manual_handling_fee || '—'),
 					'bring_manual_handling_fee: ' + (row.bring_manual_handling_fee || '—'),
+					'total_handling_fee: ' + (row.total_handling_fee || '—'),
 					'bring_manual_handling_triggered: ' + (row.bring_manual_handling_triggered ? 'ja' : 'nei'),
 					'bring_manual_handling_package_count: ' + (row.bring_manual_handling_package_count !== undefined ? row.bring_manual_handling_package_count : '—'),
 					'subtotal_ex_vat: ' + (row.subtotal_ex_vat || '—'),
@@ -1088,15 +1098,19 @@ class LP_Cargonizer_Connector {
 					'Kolli: ' + (summary.number_of_packages !== undefined ? summary.number_of_packages : '—'),
 					'Servicepartner: ' + (summary.selected_servicepartner || row.selected_servicepartner || '—'),
 					'SMS service valgt: ' + ((summary.use_sms_service || row.use_sms_service) ? 'Ja' : 'Nei'),
-					'Pakker: ' + (packageText || '—')
+					'Pakker: ' + (packageText || '—'),
+					'Formel: ' + formulaText
 				];
 				var rawXml = shortRaw(row.raw_response || '', 1200);
 				if (!rawXml && !alternatives.length && !row.selected_price_source && !row.parsed_error_message && !row.error) {
 					return '';
 				}
-				return '<details style="margin-top:6px;"><summary>Debug</summary><div style="margin-top:4px;color:#646970;">'+esc(fields.join(' | '))+'</div>' +
-					(rawXml ? '<pre style="white-space:pre-wrap;max-height:160px;overflow:auto;background:#f6f7f7;padding:8px;border:1px solid #dcdcde;margin-top:6px;">'+esc(rawXml)+'</pre>' : '') +
-					'</details>';
+				var debugContent = '<div style="margin-top:4px;color:#646970;">'+esc(fields.join(' | '))+'</div>' +
+					(rawXml ? '<pre style="white-space:pre-wrap;max-height:160px;overflow:auto;background:#f6f7f7;padding:8px;border:1px solid #dcdcde;margin-top:6px;">'+esc(rawXml)+'</pre>' : '');
+				if (!asDetails) {
+					return debugContent;
+				}
+				return '<details style="margin-top:6px;"><summary>'+esc(summaryTitle)+'</summary>' + debugContent + '</details>';
 			}
 
 			function renderServicepartnerControls(row){
@@ -1306,16 +1320,21 @@ class LP_Cargonizer_Connector {
 				});
 
 				function renderOkRow(row){
+					var toText = function(value){
+						return value !== '' && value !== undefined && value !== null ? value : '—';
+					};
 					var basePriceText = row.base_price !== '' && row.base_price !== undefined ? row.base_price : (row.selected_price_value || '—');
-					var discountPercentText = row.discount_percent !== '' && row.discount_percent !== undefined ? row.discount_percent : '—';
-					var discountedBaseText = row.discounted_base !== '' && row.discounted_base !== undefined ? row.discounted_base : '—';
-					var fuelPercentText = row.fuel_surcharge !== '' && row.fuel_surcharge !== undefined ? row.fuel_surcharge : '—';
-					var tollSurchargeText = row.toll_surcharge !== '' && row.toll_surcharge !== undefined ? row.toll_surcharge : '—';
-					var handlingFeeText = row.handling_fee !== '' && row.handling_fee !== undefined ? row.handling_fee : '—';
+					var discountPercentText = toText(row.discount_percent);
+					var discountedBaseText = toText(row.discounted_base);
+					var fuelPercentText = toText(row.fuel_surcharge);
+					var fuelAmountText = toText(row.recalculated_fuel_surcharge);
+					var tollSurchargeText = toText(row.toll_surcharge);
+					var handlingFeeText = toText(row.total_handling_fee !== '' && row.total_handling_fee !== undefined ? row.total_handling_fee : row.handling_fee);
 					var actualPriceText = row.rounded_price !== '' && row.rounded_price !== undefined
 						? row.rounded_price
 						: (row.final_price_ex_vat !== '' && row.final_price_ex_vat !== undefined ? row.final_price_ex_vat : '—');
 					var statusText = row.status || 'unknown';
+					var detailsHtml = '<details><summary>Vis beregning</summary>' + renderEstimateDebug(row, { asDetails: false }) + '</details>';
 					return '<tr>' +
 						'<td>'+esc(row.method_name || row.product_id || 'Ukjent metode')+'</td>' +
 						'<td>'+esc((row.carrier_name || '—') + (row.carrier_id ? ' (' + row.carrier_id + ')' : ''))+'</td>' +
@@ -1323,10 +1342,12 @@ class LP_Cargonizer_Connector {
 						'<td>'+esc(discountPercentText)+'</td>' +
 						'<td>'+esc(discountedBaseText)+'</td>' +
 						'<td>'+esc(fuelPercentText)+'</td>' +
+						'<td>'+esc(fuelAmountText)+'</td>' +
 						'<td>'+esc(tollSurchargeText)+'</td>' +
 						'<td>'+esc(handlingFeeText)+'</td>' +
 						'<td>'+esc(actualPriceText)+'</td>' +
 						'<td>'+esc(statusText)+'</td>' +
+						'<td>'+detailsHtml+'</td>' +
 					'</tr>';
 				}
 
@@ -1349,8 +1370,8 @@ class LP_Cargonizer_Connector {
 				}
 
 				var okRows = okResults.map(renderOkRow).join('');
-				var okTableHtml = '<table class="widefat striped"><thead><tr><th>Fraktmetode</th><th>Transportør</th><th>Listepris/grunnlag</th><th>Rabatt %</th><th>Utledet grunnfrakt etter rabatt</th><th>Drivstofftillegg (%)</th><th>Bomtillegg</th><th>Håndteringstillegg</th><th>Faktisk pris</th><th>Status</th></tr></thead><tbody>' +
-					(okRows || '<tr><td colspan="10"><em>Ingen vellykkede metoder.</em></td></tr>') +
+				var okTableHtml = '<table class="widefat striped"><thead><tr><th>Fraktmetode</th><th>Transportør</th><th>Listepris/grunnlag</th><th>Rabatt %</th><th>Utledet grunnfrakt etter rabatt</th><th>Drivstoff %</th><th>Drivstoff (kr)</th><th>Bomtillegg (kr)</th><th>Håndteringstillegg (kr)</th><th>Faktisk pris</th><th>Status</th><th>Beregning/debug</th></tr></thead><tbody>' +
+					(okRows || '<tr><td colspan="12"><em>Ingen vellykkede metoder.</em></td></tr>') +
 					'</tbody></table>';
 
 				var failedSectionHtml = '';
@@ -2548,6 +2569,8 @@ class LP_Cargonizer_Connector {
 
 			$pricing_config = isset($method_pricing[$method_key]) && is_array($method_pricing[$method_key]) ? $method_pricing[$method_key] : $this->get_default_method_pricing();
 			$discount_percent = isset($pricing_config['discount_percent']) ? $this->sanitize_discount_percent($pricing_config['discount_percent']) : 0;
+			$fuel_percent = isset($pricing_config['fuel_surcharge']) ? $this->sanitize_non_negative_number($pricing_config['fuel_surcharge']) : 0;
+			$toll_surcharge = isset($pricing_config['toll_surcharge']) ? $this->sanitize_non_negative_number($pricing_config['toll_surcharge']) : 0;
 			$bring_manual_handling = $this->get_bring_manual_handling_fee($clean_packages, $method_payload);
 			$manual_handling_fee = isset($pricing_config['handling_fee']) ? $this->sanitize_non_negative_number($pricing_config['handling_fee']) : 0;
 			$bring_manual_handling_fee = isset($bring_manual_handling['fee']) ? $this->sanitize_non_negative_number($bring_manual_handling['fee']) : 0;
@@ -2603,6 +2626,9 @@ class LP_Cargonizer_Connector {
 				'recalculated_fuel_surcharge' => '',
 				'discount_percent' => $discount_percent,
 				'discounted_base' => '',
+				'fuel_surcharge' => number_format($fuel_percent, 2, '.', ''),
+				'toll_surcharge' => number_format($toll_surcharge, 2, '.', ''),
+				'handling_fee' => number_format($total_handling_fee, 2, '.', ''),
 				'price_source_config' => isset($pricing_config['price_source']) ? $pricing_config['price_source'] : 'estimated',
 				'configured_price_source_key' => '',
 				'vat_percent' => isset($pricing_config['vat_percent']) ? $pricing_config['vat_percent'] : 0,
