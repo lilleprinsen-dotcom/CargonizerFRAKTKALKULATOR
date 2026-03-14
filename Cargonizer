@@ -1569,6 +1569,15 @@ class LP_Cargonizer_Connector {
 					return aValue - bValue;
 				});
 
+				function formatDeliveryMode(deliveryRow){
+					var hasPickup = !!deliveryRow.delivery_to_pickup_point;
+					var hasHome = !!deliveryRow.delivery_to_home;
+					if (hasPickup && hasHome) { return 'Hentested + hjemlevering'; }
+					if (hasPickup) { return 'Hentested'; }
+					if (hasHome) { return 'Hjemlevering'; }
+					return '—';
+				}
+
 				function renderOkRow(row){
 					var toText = function(value){
 						return value !== '' && value !== undefined && value !== null ? value : '—';
@@ -1589,8 +1598,7 @@ class LP_Cargonizer_Connector {
 					var detailsHtml = '<details><summary>Vis beregning</summary>' + renderEstimateDebug(row, { asDetails: false }) + '</details>';
 					return '<tr>' +
 					'<td>'+esc(row.method_name || row.product_id || 'Ukjent metode') + packageSummaryHtml + '</td>' +
-					'<td>'+esc(formatDeliveryFlag(!!row.delivery_to_pickup_point))+'</td>' +
-					'<td>'+esc(formatDeliveryFlag(!!row.delivery_to_home))+'</td>' +
+					'<td>'+esc(formatDeliveryMode(row))+'</td>' +
 					'<td>'+esc(listPriceText)+'</td>' +
 					'<td>'+esc(discountPercentText)+'</td>' +
 						'<td>'+esc(fuelPercentText)+'</td>' +
@@ -1614,8 +1622,7 @@ class LP_Cargonizer_Connector {
 					var debugText = debugFields.length ? debugFields.join(' | ') : '—';
 					return '<tr>' +
 					'<td>'+esc(row.method_name || row.product_id || 'Ukjent metode')+'</td>' +
-					'<td>'+esc(formatDeliveryFlag(!!row.delivery_to_pickup_point))+'</td>' +
-					'<td>'+esc(formatDeliveryFlag(!!row.delivery_to_home))+'</td>' +
+					'<td>'+esc(formatDeliveryMode(row))+'</td>' +
 					'<td>'+esc(row.status || 'failed')+'</td>' +
 					'<td>'+esc(row.error || row.parsed_error_message || 'Ukjent feil')+'</td>' +
 					'<td>'+esc(debugText)+'</td>' +
@@ -1623,8 +1630,8 @@ class LP_Cargonizer_Connector {
 			}
 
 				var okRows = okResults.map(renderOkRow).join('');
-				var okTableHtml = '<table class="widefat striped"><thead><tr><th>Fraktmetode</th><th>Hentested</th><th>Hjemlevering</th><th>Listepris/grunnlag</th><th>Rabatt %</th><th>Drivstoff %</th><th>Drivstoff (kr)</th><th>Bomtillegg (kr)</th><th>Håndteringstillegg (kr)</th><th>Faktisk pris</th><th>Status</th><th>Beregning/debug</th></tr></thead><tbody>' +
-					(okRows || '<tr><td colspan="12"><em>Ingen vellykkede metoder.</em></td></tr>') +
+				var okTableHtml = '<table class="widefat striped"><thead><tr><th>Fraktmetode</th><th>Leveringsmåte</th><th>Listepris/grunnlag</th><th>Rabatt %</th><th>Drivstoff %</th><th>Drivstoff (kr)</th><th>Bomtillegg (kr)</th><th>Håndteringstillegg (kr)</th><th>Faktisk pris</th><th>Status</th><th>Beregning/debug</th></tr></thead><tbody>' +
+					(okRows || '<tr><td colspan="11"><em>Ingen vellykkede metoder.</em></td></tr>') +
 					'</tbody></table>';
 
 				var failedSectionHtml = '';
@@ -1632,7 +1639,7 @@ class LP_Cargonizer_Connector {
 					var failedRows = failedResults.map(renderFailedRow).join('');
 					failedSectionHtml = '<details style="margin-top:12px;"><summary>Vis metoder som feilet (' + failedResults.length + ')</summary>' +
 						'<div style="margin-top:8px;">' +
-						'<table class="widefat striped"><thead><tr><th>Fraktmetode</th><th>Hentested</th><th>Hjemlevering</th><th>Status</th><th>Feilmelding</th><th>Debug/details</th></tr></thead><tbody>' + failedRows + '</tbody></table>' +
+						'<table class="widefat striped"><thead><tr><th>Fraktmetode</th><th>Leveringsmåte</th><th>Status</th><th>Feilmelding</th><th>Debug/details</th></tr></thead><tbody>' + failedRows + '</tbody></table>' +
 						'</div>' +
 					'</details>';
 				}
