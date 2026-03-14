@@ -1066,6 +1066,10 @@ class LP_Cargonizer_Connector {
 					'fuel_surcharge: ' + (row.fuel_surcharge || '—'),
 					'toll_surcharge: ' + (row.toll_surcharge || '—'),
 					'handling_fee: ' + (row.handling_fee || '—'),
+					'manual_handling_fee: ' + (row.manual_handling_fee || '—'),
+					'bring_manual_handling_fee: ' + (row.bring_manual_handling_fee || '—'),
+					'bring_manual_handling_triggered: ' + (row.bring_manual_handling_triggered ? 'ja' : 'nei'),
+					'bring_manual_handling_package_count: ' + (row.bring_manual_handling_package_count !== undefined ? row.bring_manual_handling_package_count : '—'),
 					'subtotal_ex_vat: ' + (row.subtotal_ex_vat || '—'),
 					'vat_percent: ' + (row.vat_percent || '—'),
 					'price_incl_vat: ' + (row.price_incl_vat || '—'),
@@ -2213,6 +2217,65 @@ class LP_Cargonizer_Connector {
 		);
 	}
 
+	private function is_bring_method($method_payload) {
+		if (!is_array($method_payload)) {
+			return false;
+		}
+
+		$carrier_id = isset($method_payload['carrier_id']) ? strtolower((string) $method_payload['carrier_id']) : '';
+		$carrier_name = isset($method_payload['carrier_name']) ? strtolower((string) $method_payload['carrier_name']) : '';
+
+		return strpos($carrier_id, 'bring') !== false || strpos($carrier_name, 'bring') !== false;
+	}
+
+	private function package_triggers_bring_manual_handling($package) {
+		if (!is_array($package)) {
+			return false;
+		}
+
+		// Bring-regel: én side >120 cm eller minst to sider >60 cm.
+		$length = isset($package['length']) ? (float) $package['length'] : 0;
+		$width = isset($package['width']) ? (float) $package['width'] : 0;
+		$height = isset($package['height']) ? (float) $package['height'] : 0;
+
+		$dimensions = array($length, $width, $height);
+		$over_60_count = 0;
+		foreach ($dimensions as $dimension) {
+			if ($dimension > 120) {
+				return true;
+			}
+			if ($dimension > 60) {
+				$over_60_count++;
+			}
+		}
+
+		return $over_60_count >= 2;
+	}
+
+	private function get_bring_manual_handling_fee($packages, $method_payload) {
+		$result = array(
+			'fee' => 0,
+			'triggered' => false,
+			'package_count' => 0,
+		);
+
+		if (!$this->is_bring_method($method_payload) || !is_array($packages)) {
+			return $result;
+		}
+
+		foreach ($packages as $package) {
+			if ($this->package_triggers_bring_manual_handling($package)) {
+				$result['package_count']++;
+			}
+		}
+
+		// 164 kr eks. mva per kolli som matcher Bring-regelen.
+		$result['fee'] = round($result['package_count'] * 164, 2);
+		$result['triggered'] = $result['package_count'] > 0;
+
+		return $result;
+	}
+
 	private function calculate_estimate_from_price_source($selected_price, $pricing_config) {
 		$result = array(
 			'status' => 'unknown',
@@ -2376,6 +2439,11 @@ class LP_Cargonizer_Connector {
 
 			$pricing_config = isset($method_pricing[$method_key]) && is_array($method_pricing[$method_key]) ? $method_pricing[$method_key] : $this->get_default_method_pricing();
 			$discount_percent = isset($pricing_config['discount_percent']) ? $this->sanitize_discount_percent($pricing_config['discount_percent']) : 0;
+			$bring_manual_handling = $this->get_bring_manual_handling_fee($clean_packages, $method_payload);
+			$manual_handling_fee = isset($pricing_config['handling_fee']) ? $this->sanitize_non_negative_number($pricing_config['handling_fee']) : 0;
+			$total_handling_fee = round($manual_handling_fee + $bring_manual_handling['fee'], 2);
+			// Behold manuelt håndteringstillegg som grunnlag og legg automatisk Bring-tillegg oppå.
+			$pricing_config['handling_fee'] = $total_handling_fee;
 
 			$item = array(
 				'method_name' => $this->format_method_label($method_payload['agreement_name'], $method_payload['product_name'], $method_payload['carrier_name']),
@@ -2415,6 +2483,10 @@ class LP_Cargonizer_Connector {
 				'configured_price_source_key' => '',
 				'vat_percent' => isset($pricing_config['vat_percent']) ? $pricing_config['vat_percent'] : 0,
 				'rounding_mode' => isset($pricing_config['rounding_mode']) ? $pricing_config['rounding_mode'] : 'none',
+				'bring_manual_handling_fee' => number_format($bring_manual_handling['fee'], 2, '.', ''),
+				'bring_manual_handling_triggered' => !empty($bring_manual_handling['triggered']),
+				'bring_manual_handling_package_count' => (int) $bring_manual_handling['package_count'],
+				'manual_handling_fee' => number_format($manual_handling_fee, 2, '.', ''),
 				'base_price' => '',
 				'subtotal_ex_vat' => '',
 				'price_incl_vat' => '',
