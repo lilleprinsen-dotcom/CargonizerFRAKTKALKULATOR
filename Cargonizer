@@ -839,7 +839,10 @@ class LP_Cargonizer_Connector {
 					<div id="lp-cargonizer-colli-validation" style="display:none;margin-top:8px;padding:8px 10px;border:1px solid #dba617;background:#fcf9e8;color:#6d4f00;"></div>
 					<div id="lp-cargonizer-colli-list" style="margin-top:10px;"></div>
 					<div id="lp-cargonizer-estimate-shipping-options" style="margin-top:16px;padding:12px;border:1px solid #dcdcde;background:#f6f7f7;">
-						<h3 style="margin:0 0 8px 0;">Fraktvalg</h3>
+						<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+							<h3 style="margin:0;">Fraktvalg</h3>
+							<button type="button" class="button" id="lp-cargonizer-select-all-shipping">Velg alle</button>
+						</div>
 						<div id="lp-cargonizer-shipping-options-list"><em>Laster fraktvalg...</em></div>
 					</div>
 					<div id="lp-cargonizer-estimate-price-results" style="margin-top:12px;padding:12px;border:1px solid #dcdcde;background:#fcfcfc;">
@@ -879,6 +882,7 @@ class LP_Cargonizer_Connector {
 			var addBtn = document.getElementById('lp-cargonizer-add-colli');
 			var closeBottomBtn = document.getElementById('lp-cargonizer-close-bottom');
 			var shippingOptionsList = document.getElementById('lp-cargonizer-shipping-options-list');
+			var selectAllShippingBtn = document.getElementById('lp-cargonizer-select-all-shipping');
 			var resultsContent = document.getElementById('lp-cargonizer-results-content');
 			var runEstimateBtn = document.getElementById('lp-cargonizer-run-estimate');
 			var currentOrderId = null;
@@ -1019,6 +1023,9 @@ class LP_Cargonizer_Connector {
 			function renderShippingOptions(options){
 				if (!Array.isArray(options) || !options.length) {
 					shippingOptionsList.innerHTML = '<em>Ingen fraktvalg funnet.</em>';
+					if (selectAllShippingBtn) {
+						selectAllShippingBtn.textContent = 'Velg alle';
+					}
 					return;
 				}
 
@@ -1052,6 +1059,27 @@ class LP_Cargonizer_Connector {
 				});
 				html += '</div>';
 				shippingOptionsList.innerHTML = html;
+				if (selectAllShippingBtn) {
+					selectAllShippingBtn.textContent = 'Velg alle';
+				}
+			}
+
+			function toggleSelectAllShippingOptions(){
+				var checkboxes = shippingOptionsList.querySelectorAll('.lp-shipping-option');
+				if (!checkboxes.length) { return; }
+				var allSelected = true;
+				checkboxes.forEach(function(input){
+					if (!input.checked) {
+						allSelected = false;
+					}
+				});
+				var shouldSelect = !allSelected;
+				checkboxes.forEach(function(input){
+					input.checked = shouldSelect;
+				});
+				if (selectAllShippingBtn) {
+					selectAllShippingBtn.textContent = shouldSelect ? 'Fjern alle' : 'Velg alle';
+				}
 			}
 
 			function getSelectedMethods(){
@@ -1411,6 +1439,29 @@ class LP_Cargonizer_Connector {
 			}
 
 			function renderEstimateResults(results){
+				function parsePriceNumber(value) {
+					if (value === null || value === undefined || value === '') {
+						return NaN;
+					}
+					var normalized = String(value).trim().replace(/\s+/g, '').replace(/[^0-9,.-]/g, '');
+					if (!normalized) {
+						return NaN;
+					}
+					var hasComma = normalized.indexOf(',') !== -1;
+					var hasDot = normalized.indexOf('.') !== -1;
+					if (hasComma && hasDot) {
+						if (normalized.lastIndexOf(',') > normalized.lastIndexOf('.')) {
+							normalized = normalized.replace(/\./g, '').replace(',', '.');
+						} else {
+							normalized = normalized.replace(/,/g, '');
+						}
+					} else if (hasComma) {
+						normalized = normalized.replace(',', '.');
+					}
+					var parsed = parseFloat(normalized);
+					return isNaN(parsed) ? NaN : parsed;
+				}
+
 				if (!Array.isArray(results) || !results.length) {
 					latestEstimateResults = [];
 					resultsContent.innerHTML = '<em>Ingen resultater å vise.</em>';
@@ -1427,6 +1478,17 @@ class LP_Cargonizer_Connector {
 					} else {
 						failedResults.push(row);
 					}
+				});
+
+				okResults.sort(function(a, b){
+					var aValue = parsePriceNumber(a && a.rounded_price !== undefined && a.rounded_price !== '' ? a.rounded_price : (a ? a.final_price_ex_vat : ''));
+					var bValue = parsePriceNumber(b && b.rounded_price !== undefined && b.rounded_price !== '' ? b.rounded_price : (b ? b.final_price_ex_vat : ''));
+					var aMissing = isNaN(aValue);
+					var bMissing = isNaN(bValue);
+					if (aMissing && bMissing) { return 0; }
+					if (aMissing) { return 1; }
+					if (bMissing) { return -1; }
+					return aValue - bValue;
 				});
 
 				function renderOkRow(row){
@@ -1457,7 +1519,7 @@ class LP_Cargonizer_Connector {
 						'<td>'+esc(fuelAmountText)+'</td>' +
 						'<td>'+esc(tollSurchargeText)+'</td>' +
 						'<td>'+esc(handlingFeeText)+'</td>' +
-						'<td>'+esc(actualPriceText)+'</td>' +
+						'<td style="font-weight:700;background:#e7f6ec;color:#125228;border-left:3px solid #1d7f45;">'+esc(actualPriceText)+'</td>' +
 						'<td>'+esc(statusText)+'</td>' +
 						'<td>'+detailsHtml+'</td>' +
 					'</tr>';
@@ -1591,6 +1653,9 @@ class LP_Cargonizer_Connector {
 
 			addBtn.addEventListener('click', function(){ createColli({}); });
 			runEstimateBtn.addEventListener('click', runEstimate);
+			if (selectAllShippingBtn) {
+				selectAllShippingBtn.addEventListener('click', toggleSelectAllShippingOptions);
+			}
 
 
 			resultsContent.addEventListener('click', function(e){
