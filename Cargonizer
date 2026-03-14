@@ -167,6 +167,7 @@ class LP_Cargonizer_Connector {
 				'fuel_surcharge' => $fuel_percent,
 				'toll_surcharge' => $toll_surcharge,
 				'handling_fee' => $handling_fee,
+				'manual_norgespakke_include_handling' => $this->sanitize_checkbox_value(isset($pricing['manual_norgespakke_include_handling']) ? $pricing['manual_norgespakke_include_handling'] : 1),
 				'price_source' => $this->sanitize_price_source(isset($pricing['price_source']) ? $pricing['price_source'] : 'estimated'),
 				'vat_percent' => $this->sanitize_non_negative_number(isset($pricing['vat_percent']) ? $pricing['vat_percent'] : 0),
 				'rounding_mode' => $this->sanitize_rounding_mode(isset($pricing['rounding_mode']) ? $pricing['rounding_mode'] : 'none'),
@@ -180,6 +181,7 @@ class LP_Cargonizer_Connector {
 					'fuel_surcharge' => 0,
 					'toll_surcharge' => 0,
 					'handling_fee' => 0,
+					'manual_norgespakke_include_handling' => 1,
 					'price_source' => 'estimated',
 					'vat_percent' => 0,
 					'rounding_mode' => 'none',
@@ -225,6 +227,17 @@ class LP_Cargonizer_Connector {
 		}
 
 		return round($number, 2);
+	}
+
+	private function sanitize_checkbox_value($value) {
+		if (is_bool($value)) {
+			return $value ? 1 : 0;
+		}
+
+		$normalized = strtolower(trim((string) $value));
+		$truthy_values = array('1', 'true', 'yes', 'on');
+
+		return in_array($normalized, $truthy_values, true) ? 1 : 0;
 	}
 
 	private function sanitize_adjustment_type($value) {
@@ -526,6 +539,7 @@ class LP_Cargonizer_Connector {
 			'fuel_surcharge' => 0,
 			'toll_surcharge' => 0,
 			'handling_fee' => 0,
+			'manual_norgespakke_include_handling' => 1,
 			'price_source' => 'estimated',
 			'vat_percent' => 0,
 			'rounding_mode' => 'none',
@@ -561,6 +575,7 @@ class LP_Cargonizer_Connector {
 				'fuel_surcharge' => round($fuel_percent, 2),
 				'toll_surcharge' => round($toll_surcharge, 2),
 				'handling_fee' => round($handling_fee, 2),
+				'manual_norgespakke_include_handling' => isset($raw['manual_norgespakke_include_handling']) ? $this->sanitize_checkbox_value($raw['manual_norgespakke_include_handling']) : $default['manual_norgespakke_include_handling'],
 				'price_source' => $price_source,
 				'vat_percent' => isset($raw['vat_percent']) ? $this->sanitize_non_negative_number($raw['vat_percent']) : 0,
 				'rounding_mode' => isset($raw['rounding_mode']) ? $this->sanitize_rounding_mode($raw['rounding_mode']) : 'none',
@@ -2610,6 +2625,9 @@ class LP_Cargonizer_Connector {
 		$toll_surcharge = isset($pricing_config['toll_surcharge']) ? $this->sanitize_non_negative_number($pricing_config['toll_surcharge']) : 0;
 		$vat_percent = isset($pricing_config['vat_percent']) ? $this->sanitize_non_negative_number($pricing_config['vat_percent']) : 0;
 		$rounding_mode = isset($pricing_config['rounding_mode']) ? $this->sanitize_rounding_mode($pricing_config['rounding_mode']) : 'none';
+		$include_handling_fee = isset($pricing_config['manual_norgespakke_include_handling'])
+			? (bool) $this->sanitize_checkbox_value($pricing_config['manual_norgespakke_include_handling'])
+			: true;
 
 		$package_rows = array();
 		$total_base = 0.0;
@@ -2642,8 +2660,8 @@ class LP_Cargonizer_Connector {
 			}
 
 			$handling_triggered = $this->package_triggers_manual_handling($package);
-			$handling_fee = $handling_triggered ? 164.0 : 0.0;
-			if ($handling_triggered) {
+			$handling_fee = ($include_handling_fee && $handling_triggered) ? 164.0 : 0.0;
+			if ($include_handling_fee && $handling_triggered) {
 				$handling_count++;
 			}
 
@@ -2695,6 +2713,7 @@ class LP_Cargonizer_Connector {
 		$result['norgespakke_debug'] = array(
 			'method_type' => 'manual',
 			'api_calls_used' => false,
+			'handling_fee_enabled' => $include_handling_fee,
 			'number_of_packages' => count($packages),
 			'packages' => $package_rows,
 			'total_base_freight' => number_format($total_base, 2, '.', ''),
@@ -3343,6 +3362,8 @@ class LP_Cargonizer_Connector {
 										$handling_fee = $this->sanitize_non_negative_number(isset($pricing['handling_fee']) ? $pricing['handling_fee'] : 0);
 										$vat_percent = $this->sanitize_non_negative_number(isset($pricing['vat_percent']) ? $pricing['vat_percent'] : 0);
 										$rounding_mode = $this->sanitize_rounding_mode(isset($pricing['rounding_mode']) ? $pricing['rounding_mode'] : 'none');
+										$include_manual_norgespakke_handling = isset($pricing['manual_norgespakke_include_handling']) ? (bool) $this->sanitize_checkbox_value($pricing['manual_norgespakke_include_handling']) : true;
+										$is_manual_norgespakke_method = $this->is_manual_norgespakke_method($method);
 								?>
 								<div style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px solid #f0f0f1;">
 									<input class="lp-cargonizer-method-toggle" type="checkbox" name="lp_cargonizer_enabled_methods[]" value="<?php echo esc_attr($method_key); ?>" <?php checked($is_enabled); ?>>
@@ -3383,6 +3404,13 @@ class LP_Cargonizer_Connector {
 											<span>Håndteringstillegg (kr)</span><small style="color:#646970;">Fast kronepåslag.</small>
 											<input class="small-text lp-cargonizer-method-input" type="number" min="0" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][handling_fee]" value="<?php echo esc_attr($handling_fee); ?>" <?php disabled(!$is_enabled); ?>>
 										</label>
+										<?php if ($is_manual_norgespakke_method) : ?>
+											<label style="display:flex;flex-direction:column;gap:4px;">
+												<span>Ta hensyn til håndteringstillegg</span><small style="color:#646970;">Gjelder kun manuell Norgespakke.</small>
+												<input type="hidden" class="lp-cargonizer-method-input" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][manual_norgespakke_include_handling]" value="0" <?php disabled(!$is_enabled); ?>>
+												<input class="lp-cargonizer-method-input" type="checkbox" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][manual_norgespakke_include_handling]" value="1" <?php checked($include_manual_norgespakke_handling); ?> <?php disabled(!$is_enabled); ?>>
+											</label>
+										<?php endif; ?>
 										<label style="display:flex;flex-direction:column;gap:4px;">
 											<span>MVA (%)</span><small style="color:#646970;">Legges på etter rabatt og tillegg.</small>
 											<input class="small-text lp-cargonizer-method-input" type="number" min="0" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][vat_percent]" value="<?php echo esc_attr($vat_percent); ?>" <?php disabled(!$is_enabled); ?>>
