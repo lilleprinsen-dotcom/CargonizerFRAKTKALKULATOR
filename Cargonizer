@@ -1723,6 +1723,9 @@ class LP_Cargonizer_Connector {
 			$height_cm = isset($package['height']) ? (float) $package['height'] : 0;
 			$volume_dm3 = ($length_cm * $width_cm * $height_cm) / 1000;
 			$description = isset($package['description']) ? trim((string) $package['description']) : '';
+			$length_xml = $this->normalize_positive_decimal_for_xml(isset($package['length']) ? $package['length'] : null);
+			$width_xml = $this->normalize_positive_decimal_for_xml(isset($package['width']) ? $package['width'] : null);
+			$height_xml = $this->normalize_positive_decimal_for_xml(isset($package['height']) ? $package['height'] : null);
 
 			$item = $items->addChild('item');
 			$item->addAttribute('type', 'package');
@@ -1730,9 +1733,61 @@ class LP_Cargonizer_Connector {
 			$item->addChild('description', esc_html($description));
 			$item->addChild('weight', (string) max(0, $weight));
 			$item->addChild('volume', (string) max(0, $volume_dm3));
+			if ($length_xml !== '') {
+				$item->addChild('length', $length_xml);
+			}
+			if ($width_xml !== '') {
+				$item->addChild('width', $width_xml);
+			}
+			if ($height_xml !== '') {
+				$item->addChild('height', $height_xml);
+			}
+
+			$this->log_estimate_package_dimensions(array(
+				'package_name' => isset($package['name']) ? sanitize_text_field((string) $package['name']) : '',
+				'description' => $description,
+				'weight' => (string) max(0, $weight),
+				'volume' => (string) max(0, $volume_dm3),
+				'length' => $length_xml,
+				'width' => $width_xml,
+				'height' => $height_xml,
+			));
 		}
 
 		return $xml->asXML();
+	}
+
+	private function normalize_positive_decimal_for_xml($value) {
+		if (is_string($value)) {
+			$value = str_replace(',', '.', $value);
+		}
+
+		if (!is_numeric($value)) {
+			return '';
+		}
+
+		$number = (float) $value;
+		if ($number <= 0) {
+			return '';
+		}
+
+		$formatted = number_format($number, 3, '.', '');
+		$formatted = rtrim(rtrim($formatted, '0'), '.');
+
+		return $formatted;
+	}
+
+	private function log_estimate_package_dimensions($data) {
+		if (!function_exists('wc_get_logger')) {
+			return;
+		}
+
+		$logger = wc_get_logger();
+		if (!$logger) {
+			return;
+		}
+
+		$logger->debug('Estimate package dimensions sent to Cargonizer: ' . wp_json_encode($data), array('source' => 'lp-cargonizer-estimate'));
 	}
 
 
