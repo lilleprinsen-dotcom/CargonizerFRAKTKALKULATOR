@@ -1128,13 +1128,45 @@ class LP_Cargonizer_Connector {
 				return value.length > max ? (value.slice(0, max) + '...') : value;
 			}
 
+			function getManualNorgespakkePackages(row){
+				if (!row || row.selected_price_source !== 'manual_norgespakke') { return []; }
+				var debug = row.norgespakke_debug || {};
+				if (!Array.isArray(debug.packages)) { return []; }
+				return debug.packages;
+			}
+
+			function renderManualNorgespakkeSummary(row, options){
+				var packages = getManualNorgespakkePackages(row);
+				if (!packages.length) { return ''; }
+				var opts = options || {};
+				var compact = !!opts.compact;
+				var title = opts.title || 'Kollioversikt';
+				var wrapperStyle = compact
+					? 'margin-top:6px;padding:8px 10px;border:1px solid #dcdcde;background:#f6f7f7;border-radius:4px;font-size:12px;line-height:1.5;'
+					: 'margin-top:8px;padding:10px 12px;border:1px solid #dcdcde;background:#f6f7f7;border-radius:4px;line-height:1.5;';
+				var lines = packages.map(function(pkg, idx){
+					var number = pkg.package_number || (idx + 1);
+					var weight = (pkg.weight !== undefined && pkg.weight !== null && pkg.weight !== '') ? pkg.weight : '0';
+					var length = (pkg.length !== undefined && pkg.length !== null && pkg.length !== '') ? pkg.length : '0';
+					var width = (pkg.width !== undefined && pkg.width !== null && pkg.width !== '') ? pkg.width : '0';
+					var height = (pkg.height !== undefined && pkg.height !== null && pkg.height !== '') ? pkg.height : '0';
+					var hasSize = parseFloat(length) > 0 || parseFloat(width) > 0 || parseFloat(height) > 0;
+					var sizeText = hasSize ? (' – ' + length + 'x' + width + 'x' + height + ' cm') : '';
+					return '<li style="margin-bottom:4px;">Kolli ' + esc(number) + ' – ' + esc(weight) + ' kg' + esc(sizeText) + '</li>';
+				}).join('');
+				return '<div style="' + wrapperStyle + '">' +
+					'<div style="font-weight:600;margin-bottom:4px;">' + esc(title) + ': ' + esc(packages.length) + ' kolli</div>' +
+					'<ul style="margin:0 0 0 18px;">' + lines + '</ul>' +
+				'</div>';
+			}
+
 			function renderEstimateDebug(row, options){
 				if (!row) { return ''; }
 				var opts = options || {};
 				var isManualNorgespakke = row.selected_price_source === 'manual_norgespakke';
 				if (isManualNorgespakke) {
 					var debug = row.norgespakke_debug || {};
-					var packageRows = Array.isArray(debug.packages) ? debug.packages : [];
+					var packageRows = getManualNorgespakkePackages(row);
 					var packageHtml = packageRows.map(function(pkg){
 						return '<li style="margin-bottom:6px;">' +
 							'Kolli ' + esc(pkg.package_number || '—') + ': ' + esc(pkg.name || pkg.description || '—') +
@@ -1161,7 +1193,8 @@ class LP_Cargonizer_Connector {
 						'Avrunding: ' + (debug.rounding_mode || row.rounding_mode || '—'),
 						'Sluttpris eks mva: ' + (debug.final_price_ex_vat || row.final_price_ex_vat || '—')
 					];
-					var html = '<div style="margin-top:4px;color:#646970;">' + esc(lines.join(' | ')) + '</div>' +
+					var html = renderManualNorgespakkeSummary(row, { title: 'Kollioversikt for lager' }) +
+						'<div style="margin-top:4px;color:#646970;">' + esc(lines.join(' | ')) + '</div>' +
 						(packageHtml ? '<ul style="margin:8px 0 0 18px;">' + packageHtml + '</ul>' : '');
 					if (opts.asDetails === false) {
 						return html;
@@ -1508,9 +1541,10 @@ class LP_Cargonizer_Connector {
 						? row.rounded_price
 						: (row.final_price_ex_vat !== '' && row.final_price_ex_vat !== undefined ? row.final_price_ex_vat : '—');
 					var statusText = row.status || 'unknown';
+					var packageSummaryHtml = renderManualNorgespakkeSummary(row, { compact: true, title: 'Kolli' });
 					var detailsHtml = '<details><summary>Vis beregning</summary>' + renderEstimateDebug(row, { asDetails: false }) + '</details>';
 					return '<tr>' +
-						'<td>'+esc(row.method_name || row.product_id || 'Ukjent metode')+'</td>' +
+						'<td>'+esc(row.method_name || row.product_id || 'Ukjent metode') + packageSummaryHtml + '</td>' +
 						'<td>'+esc((row.carrier_name || '—') + (row.carrier_id ? ' (' + row.carrier_id + ')' : ''))+'</td>' +
 						'<td>'+esc(listPriceText)+'</td>' +
 						'<td>'+esc(discountPercentText)+'</td>' +
