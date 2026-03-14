@@ -2340,6 +2340,11 @@ class LP_Cargonizer_Connector {
 			'error' => '',
 			'original_price' => '',
 			'original_list_price' => '',
+			'manual_handling_fee' => '',
+			'bring_manual_handling_fee' => '',
+			'total_handling_fee' => '',
+			'bring_manual_handling_triggered' => false,
+			'bring_manual_handling_package_count' => 0,
 			'extracted_handling_fee' => '',
 			'extracted_toll_surcharge' => '',
 			'extracted_fuel_percent' => '',
@@ -2374,29 +2379,37 @@ class LP_Cargonizer_Connector {
 		}
 
 		$discount_percent = isset($pricing_config['discount_percent']) ? $this->sanitize_discount_percent($pricing_config['discount_percent']) : 0;
-		$extracted_fuel_percent = isset($pricing_config['fuel_surcharge']) ? $this->sanitize_non_negative_number($pricing_config['fuel_surcharge']) : 0;
+		// fuel_surcharge-feltet lagres historisk under samme nøkkel, men behandles som prosent.
+		$fuel_percent = isset($pricing_config['fuel_surcharge']) ? $this->sanitize_non_negative_number($pricing_config['fuel_surcharge']) : 0;
 		$extracted_toll_surcharge = isset($pricing_config['toll_surcharge']) ? $this->sanitize_non_negative_number($pricing_config['toll_surcharge']) : 0;
-		$configured_handling_fee = isset($pricing_config['handling_fee']) ? $this->sanitize_non_negative_number($pricing_config['handling_fee']) : 0;
-		$handling_triggered = !empty($pricing_config['bring_manual_handling_triggered']);
-		$extracted_handling_fee = $handling_triggered ? $configured_handling_fee : 0;
+		$manual_handling_fee = isset($pricing_config['manual_handling_fee'])
+			? $this->sanitize_non_negative_number($pricing_config['manual_handling_fee'])
+			: (isset($pricing_config['handling_fee']) ? $this->sanitize_non_negative_number($pricing_config['handling_fee']) : 0);
+		$bring_manual_handling_fee = isset($pricing_config['bring_manual_handling_fee']) ? $this->sanitize_non_negative_number($pricing_config['bring_manual_handling_fee']) : 0;
+		$bring_manual_handling_triggered = !empty($pricing_config['bring_manual_handling_triggered']);
+		if (!$bring_manual_handling_triggered) {
+			$bring_manual_handling_fee = 0;
+		}
+		$total_handling_fee = round($manual_handling_fee + $bring_manual_handling_fee, 2);
+		$bring_manual_handling_package_count = isset($pricing_config['bring_manual_handling_package_count']) ? max(0, (int) $pricing_config['bring_manual_handling_package_count']) : 0;
 		$vat_percent = isset($pricing_config['vat_percent']) ? (float) $pricing_config['vat_percent'] : 0;
 		$rounding_mode = isset($pricing_config['rounding_mode']) ? $this->sanitize_rounding_mode($pricing_config['rounding_mode']) : 'none';
 
-		// selected_price/value tolkes som listepris inkl. drivstoff, bom og ev. håndtering.
-		$list_minus_fixed_fees = $original_list_price - $extracted_handling_fee - $extracted_toll_surcharge;
+		// selected_price/value tolkes som listepris inkl. drivstoff, bom og håndtering.
+		$list_minus_fixed_fees = $original_list_price - $total_handling_fee - $extracted_toll_surcharge;
 		if ($list_minus_fixed_fees < 0) {
 			$list_minus_fixed_fees = 0;
 		}
 
-		$fuel_multiplier = 1 + ($extracted_fuel_percent / 100);
+		$fuel_multiplier = 1 + ($fuel_percent / 100);
 		if ($fuel_multiplier <= 0) {
 			$fuel_multiplier = 1;
 		}
 
 		$extracted_base_freight = $list_minus_fixed_fees / $fuel_multiplier;
 		$discounted_base_freight = $extracted_base_freight - ($extracted_base_freight * $discount_percent / 100);
-		$recalculated_fuel_surcharge = $discounted_base_freight * ($extracted_fuel_percent / 100);
-		$subtotal_ex_vat = $discounted_base_freight + $recalculated_fuel_surcharge + $extracted_toll_surcharge + $extracted_handling_fee;
+		$recalculated_fuel_surcharge = $discounted_base_freight * ($fuel_percent / 100);
+		$subtotal_ex_vat = $discounted_base_freight + $recalculated_fuel_surcharge + $extracted_toll_surcharge + $total_handling_fee;
 		$price_incl_vat = $subtotal_ex_vat * (1 + ($vat_percent / 100));
 		$rounded_price = $this->apply_rounding_mode($price_incl_vat, $rounding_mode);
 		$final_price_ex_vat = $vat_percent > 0 ? ($rounded_price / (1 + ($vat_percent / 100))) : $rounded_price;
@@ -2404,9 +2417,14 @@ class LP_Cargonizer_Connector {
 		$result['status'] = 'ok';
 		$result['original_price'] = number_format($original_list_price, 2, '.', '');
 		$result['original_list_price'] = number_format($original_list_price, 2, '.', '');
-		$result['extracted_handling_fee'] = number_format($extracted_handling_fee, 2, '.', '');
+		$result['manual_handling_fee'] = number_format($manual_handling_fee, 2, '.', '');
+		$result['bring_manual_handling_fee'] = number_format($bring_manual_handling_fee, 2, '.', '');
+		$result['total_handling_fee'] = number_format($total_handling_fee, 2, '.', '');
+		$result['bring_manual_handling_triggered'] = $bring_manual_handling_triggered;
+		$result['bring_manual_handling_package_count'] = $bring_manual_handling_package_count;
+		$result['extracted_handling_fee'] = number_format($total_handling_fee, 2, '.', '');
 		$result['extracted_toll_surcharge'] = number_format($extracted_toll_surcharge, 2, '.', '');
-		$result['extracted_fuel_percent'] = number_format($extracted_fuel_percent, 2, '.', '');
+		$result['extracted_fuel_percent'] = number_format($fuel_percent, 2, '.', '');
 		$result['extracted_base_freight'] = number_format($extracted_base_freight, 2, '.', '');
 		$result['discounted_base_freight'] = number_format($discounted_base_freight, 2, '.', '');
 		$result['recalculated_fuel_surcharge'] = number_format($recalculated_fuel_surcharge, 2, '.', '');
@@ -2415,7 +2433,7 @@ class LP_Cargonizer_Connector {
 		$result['discounted_base'] = number_format($discounted_base_freight, 2, '.', '');
 		$result['fuel_surcharge'] = number_format($recalculated_fuel_surcharge, 2, '.', '');
 		$result['toll_surcharge'] = number_format($extracted_toll_surcharge, 2, '.', '');
-		$result['handling_fee'] = number_format($extracted_handling_fee, 2, '.', '');
+		$result['handling_fee'] = number_format($total_handling_fee, 2, '.', '');
 		$result['subtotal_ex_vat'] = number_format($subtotal_ex_vat, 2, '.', '');
 		$result['price_incl_vat'] = number_format($price_incl_vat, 2, '.', '');
 		$result['rounded_price'] = number_format($rounded_price, 2, '.', '');
@@ -2530,8 +2548,16 @@ class LP_Cargonizer_Connector {
 			$discount_percent = isset($pricing_config['discount_percent']) ? $this->sanitize_discount_percent($pricing_config['discount_percent']) : 0;
 			$bring_manual_handling = $this->get_bring_manual_handling_fee($clean_packages, $method_payload);
 			$manual_handling_fee = isset($pricing_config['handling_fee']) ? $this->sanitize_non_negative_number($pricing_config['handling_fee']) : 0;
-			$total_handling_fee = round($manual_handling_fee + $bring_manual_handling['fee'], 2);
-			// Behold manuelt håndteringstillegg som grunnlag og legg automatisk Bring-tillegg oppå.
+			$bring_manual_handling_fee = isset($bring_manual_handling['fee']) ? $this->sanitize_non_negative_number($bring_manual_handling['fee']) : 0;
+			$bring_manual_handling_triggered = !empty($bring_manual_handling['triggered']);
+			if (!$bring_manual_handling_triggered) {
+				$bring_manual_handling_fee = 0;
+			}
+			$total_handling_fee = round($manual_handling_fee + $bring_manual_handling_fee, 2);
+			$pricing_config['manual_handling_fee'] = $manual_handling_fee;
+			$pricing_config['bring_manual_handling_fee'] = $bring_manual_handling_fee;
+			$pricing_config['bring_manual_handling_triggered'] = $bring_manual_handling_triggered;
+			$pricing_config['bring_manual_handling_package_count'] = isset($bring_manual_handling['package_count']) ? (int) $bring_manual_handling['package_count'] : 0;
 			$pricing_config['handling_fee'] = $total_handling_fee;
 
 			$item = array(
@@ -2579,10 +2605,11 @@ class LP_Cargonizer_Connector {
 				'configured_price_source_key' => '',
 				'vat_percent' => isset($pricing_config['vat_percent']) ? $pricing_config['vat_percent'] : 0,
 				'rounding_mode' => isset($pricing_config['rounding_mode']) ? $pricing_config['rounding_mode'] : 'none',
-				'bring_manual_handling_fee' => number_format($bring_manual_handling['fee'], 2, '.', ''),
-				'bring_manual_handling_triggered' => !empty($bring_manual_handling['triggered']),
-				'bring_manual_handling_package_count' => (int) $bring_manual_handling['package_count'],
 				'manual_handling_fee' => number_format($manual_handling_fee, 2, '.', ''),
+				'bring_manual_handling_fee' => number_format($bring_manual_handling_fee, 2, '.', ''),
+				'total_handling_fee' => number_format($total_handling_fee, 2, '.', ''),
+				'bring_manual_handling_triggered' => $bring_manual_handling_triggered,
+				'bring_manual_handling_package_count' => isset($bring_manual_handling['package_count']) ? (int) $bring_manual_handling['package_count'] : 0,
 				'base_price' => '',
 				'subtotal_ex_vat' => '',
 				'price_incl_vat' => '',
@@ -2699,6 +2726,11 @@ class LP_Cargonizer_Connector {
 			} else {
 				$item['original_price'] = $calculated['original_price'];
 				$item['original_list_price'] = $calculated['original_list_price'];
+				$item['manual_handling_fee'] = $calculated['manual_handling_fee'];
+				$item['bring_manual_handling_fee'] = $calculated['bring_manual_handling_fee'];
+				$item['total_handling_fee'] = $calculated['total_handling_fee'];
+				$item['bring_manual_handling_triggered'] = !empty($calculated['bring_manual_handling_triggered']);
+				$item['bring_manual_handling_package_count'] = isset($calculated['bring_manual_handling_package_count']) ? (int) $calculated['bring_manual_handling_package_count'] : 0;
 				$item['extracted_handling_fee'] = $calculated['extracted_handling_fee'];
 				$item['extracted_toll_surcharge'] = $calculated['extracted_toll_surcharge'];
 				$item['extracted_fuel_percent'] = $calculated['extracted_fuel_percent'];
@@ -2905,7 +2937,7 @@ class LP_Cargonizer_Connector {
 											<input class="small-text lp-cargonizer-method-input" type="number" min="0" max="100" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][discount_percent]" value="<?php echo esc_attr($discount_value); ?>" <?php disabled(!$is_enabled); ?>>
 										</label>
 										<label style="display:flex;flex-direction:column;gap:4px;">
-											<span>Drivstofftillegg (kr)</span><small style="color:#646970;">Fast kronepåslag.</small>
+											<span>Drivstofftillegg (%)</span><small style="color:#646970;">Prosent av grunnfrakt (brukes baklengs mot listepris).</small>
 											<input class="small-text lp-cargonizer-method-input" type="number" min="0" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][fuel_surcharge]" value="<?php echo esc_attr($fuel_surcharge); ?>" <?php disabled(!$is_enabled); ?>>
 										</label>
 										<label style="display:flex;flex-direction:column;gap:4px;">
