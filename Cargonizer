@@ -1060,6 +1060,9 @@ class LP_Cargonizer_Connector {
 					'price_source_fallback_used: ' + (row.price_source_fallback_used ? 'ja' : 'nei'),
 					'price_source_fallback_reason: ' + (row.price_source_fallback_reason || '—'),
 					'rounding_mode: ' + (row.rounding_mode || '—'),
+					'original_price: ' + (row.original_price || '—'),
+					'original_list_price: ' + (row.original_list_price || '—'),
+					'extracted_base_freight: ' + (row.extracted_base_freight || '—'),
 					'base_price: ' + (row.base_price || '—'),
 					'discount_percent: ' + (row.discount_percent || '—'),
 					'discounted_base: ' + (row.discounted_base || '—'),
@@ -2335,6 +2338,7 @@ class LP_Cargonizer_Connector {
 		$result = array(
 			'status' => 'unknown',
 			'error' => '',
+			'original_price' => '',
 			'original_list_price' => '',
 			'extracted_handling_fee' => '',
 			'extracted_toll_surcharge' => '',
@@ -2398,6 +2402,7 @@ class LP_Cargonizer_Connector {
 		$final_price_ex_vat = $vat_percent > 0 ? ($rounded_price / (1 + ($vat_percent / 100))) : $rounded_price;
 
 		$result['status'] = 'ok';
+		$result['original_price'] = number_format($original_list_price, 2, '.', '');
 		$result['original_list_price'] = number_format($original_list_price, 2, '.', '');
 		$result['extracted_handling_fee'] = number_format($extracted_handling_fee, 2, '.', '');
 		$result['extracted_toll_surcharge'] = number_format($extracted_toll_surcharge, 2, '.', '');
@@ -2692,6 +2697,7 @@ class LP_Cargonizer_Connector {
 					$item['parsed_error_message'] = $this->parse_response_error_message($body);
 				}
 			} else {
+				$item['original_price'] = $calculated['original_price'];
 				$item['original_list_price'] = $calculated['original_list_price'];
 				$item['extracted_handling_fee'] = $calculated['extracted_handling_fee'];
 				$item['extracted_toll_surcharge'] = $calculated['extracted_toll_surcharge'];
