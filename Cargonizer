@@ -12,6 +12,7 @@ if (!defined('ABSPATH')) {
 
 class LP_Cargonizer_Connector {
 	const OPTION_KEY = 'lp_cargonizer_settings';
+	const MANUAL_NORGESPAKKE_KEY = 'manual|norgespakke';
 	const NONCE_ACTION_SAVE = 'lp_cargonizer_save_settings';
 	const NONCE_ACTION_FETCH = 'lp_cargonizer_fetch_methods';
 	const NONCE_ACTION_ORDER_DATA = 'lp_cargonizer_get_order_data';
@@ -51,6 +52,8 @@ class LP_Cargonizer_Connector {
 			? $input['available_methods']
 			: (isset($current['available_methods']) && is_array($current['available_methods']) ? $current['available_methods'] : array());
 
+		$available_methods = $this->ensure_internal_manual_methods($available_methods);
+
 		$output = array(
 			'api_key'   => isset($input['api_key']) ? sanitize_text_field($input['api_key']) : '',
 			'sender_id' => isset($input['sender_id']) ? sanitize_text_field($input['sender_id']) : '',
@@ -67,6 +70,7 @@ class LP_Cargonizer_Connector {
 		if ($output['sender_id'] === '' && !empty($current['sender_id'])) {
 			$output['sender_id'] = $current['sender_id'];
 		}
+
 
 		$available_map = array();
 		foreach ($available_methods as $method) {
@@ -229,7 +233,7 @@ class LP_Cargonizer_Connector {
 
 	private function sanitize_price_source($value) {
 		$source = sanitize_text_field((string) $value);
-		$allowed = array('net', 'gross', 'estimated', 'fallback');
+		$allowed = array('net', 'gross', 'estimated', 'fallback', 'manual_norgespakke');
 		return in_array($source, $allowed, true) ? $source : 'estimated';
 	}
 
@@ -243,7 +247,7 @@ class LP_Cargonizer_Connector {
 		$defaults = array(
 			'api_key'   => '',
 			'sender_id' => '',
-			'available_methods' => array(),
+			'available_methods' => array($this->get_manual_norgespakke_method()),
 			'enabled_methods' => array(),
 			'method_discounts' => array(),
 			'method_pricing' => array(),
@@ -398,7 +402,60 @@ class LP_Cargonizer_Connector {
 			}
 		}
 
+		return $this->ensure_internal_manual_methods($options);
+	}
+
+
+	private function get_manual_norgespakke_method() {
+		return array(
+			'key' => self::MANUAL_NORGESPAKKE_KEY,
+			'agreement_id' => 'manual',
+			'agreement_name' => 'Manuell booking',
+			'agreement_description' => 'Manuell metode (ingen Cargonizer-estimat)',
+			'agreement_number' => '',
+			'carrier_id' => 'posten',
+			'carrier_name' => 'Posten',
+			'product_id' => 'norgespakke',
+			'product_name' => 'Norgespakke',
+			'services' => array(),
+			'is_manual' => true,
+			'label' => 'Posten - Norgespakke (manuell)',
+		);
+	}
+
+	private function ensure_internal_manual_methods($options) {
+		if (!is_array($options)) {
+			$options = array();
+		}
+
+		$has_norgespakke = false;
+		foreach ($options as $option) {
+			$key = isset($option['key']) ? (string) $option['key'] : '';
+			if ($key === self::MANUAL_NORGESPAKKE_KEY) {
+				$has_norgespakke = true;
+				break;
+			}
+		}
+
+		if (!$has_norgespakke) {
+			$options[] = $this->get_manual_norgespakke_method();
+		}
+
 		return $options;
+	}
+
+	private function is_manual_norgespakke_method($method_payload) {
+		if (!is_array($method_payload)) {
+			return false;
+		}
+
+		$key = trim((string) (isset($method_payload['agreement_id']) ? $method_payload['agreement_id'] : '')) . '|' . trim((string) (isset($method_payload['product_id']) ? $method_payload['product_id'] : ''));
+		if ($key === self::MANUAL_NORGESPAKKE_KEY) {
+			return true;
+		}
+
+		$product_id = strtolower(trim((string) (isset($method_payload['product_id']) ? $method_payload['product_id'] : '')));
+		return $product_id === 'norgespakke';
 	}
 
 	private function get_enabled_method_map() {
@@ -956,6 +1013,7 @@ class LP_Cargonizer_Connector {
 					var label = option.label || ((option.agreement_name || '') + ' - ' + (option.product_name || ''));
 					var agreementText = option.agreement_description || option.agreement_name || option.agreement_id || '—';
 					var productText = option.product_name || option.product_id || '—';
+					var isManual = !!option.is_manual;
 					var smsServiceId = '';
 					var smsServiceName = '';
 					if (Array.isArray(option.services)) {
@@ -969,9 +1027,9 @@ class LP_Cargonizer_Connector {
 						});
 					}
 					html += '<label style="display:flex;gap:10px;align-items:flex-start;padding:10px;border:1px solid #dcdcde;background:#fff;line-height:1.35;">' +
-						'<input type="checkbox" class="lp-shipping-option" data-agreement-id="'+esc(option.agreement_id || '')+'" data-agreement-name="'+esc(option.agreement_name || '')+'" data-agreement-description="'+esc(option.agreement_description || '')+'" data-agreement-number="'+esc(option.agreement_number || '')+'" data-carrier-id="'+esc(option.carrier_id || '')+'" data-carrier-name="'+esc(option.carrier_name || '')+'" data-product-id="'+esc(option.product_id || '')+'" data-product-name="'+esc(option.product_name || '')+'" data-sms-service-id="'+esc(smsServiceId)+'" data-sms-service-name="'+esc(smsServiceName)+'">' +
+						'<input type="checkbox" class="lp-shipping-option" data-agreement-id="'+esc(option.agreement_id || '')+'" data-agreement-name="'+esc(option.agreement_name || '')+'" data-agreement-description="'+esc(option.agreement_description || '')+'" data-agreement-number="'+esc(option.agreement_number || '')+'" data-carrier-id="'+esc(option.carrier_id || '')+'" data-carrier-name="'+esc(option.carrier_name || '')+'" data-product-id="'+esc(option.product_id || '')+'" data-product-name="'+esc(option.product_name || '')+'" data-is-manual="'+(isManual ? '1' : '')+'" data-sms-service-id="'+esc(smsServiceId)+'" data-sms-service-name="'+esc(smsServiceName)+'">' +
 						'<span style="display:flex;flex-direction:column;gap:3px;">' +
-							'<strong>'+esc(label)+'</strong>' +
+							'<strong>'+esc(label)+(isManual ? ' <span style="font-weight:400;color:#646970;">(manuell)</span>' : '')+'</strong>' +
 							'<span style="color:#646970;">Transportør: '+esc(option.carrier_name || '—')+'</span>' +
 							'<span style="color:#646970;">Fraktavtale: '+esc(agreementText)+'</span>' +
 							'<span style="color:#646970;">Produkt: '+esc(productText)+'</span>' +
@@ -994,6 +1052,7 @@ class LP_Cargonizer_Connector {
 						carrier_name: input.getAttribute('data-carrier-name') || '',
 						product_id: input.getAttribute('data-product-id') || '',
 						product_name: input.getAttribute('data-product-name') || '',
+						is_manual: input.getAttribute('data-is-manual') === '1',
 						sms_service_id: input.getAttribute('data-sms-service-id') || '',
 						sms_service_name: input.getAttribute('data-sms-service-name') || ''
 					});
@@ -1030,6 +1089,43 @@ class LP_Cargonizer_Connector {
 			function renderEstimateDebug(row, options){
 				if (!row) { return ''; }
 				var opts = options || {};
+				var isManualNorgespakke = row.selected_price_source === 'manual_norgespakke';
+				if (isManualNorgespakke) {
+					var debug = row.norgespakke_debug || {};
+					var packageRows = Array.isArray(debug.packages) ? debug.packages : [];
+					var packageHtml = packageRows.map(function(pkg){
+						return '<li style="margin-bottom:6px;">' +
+							'Kolli ' + esc(pkg.package_number || '—') + ': ' + esc(pkg.name || pkg.description || '—') +
+							' | vekt ' + esc(pkg.weight || '0') + ' kg' +
+							' | LxBxH ' + esc(pkg.length || '0') + 'x' + esc(pkg.width || '0') + 'x' + esc(pkg.height || '0') + ' cm' +
+							' | grunnpris ' + esc(pkg.base_price || '0') + ' kr' +
+							' | håndtering ' + (pkg.handling_triggered ? 'ja' : 'nei') +
+							' (' + esc(pkg.handling_fee || '0') + ' kr)' +
+							' | kolli-sum ' + esc(pkg.package_total || '0') + ' kr' +
+							' | årsak: ' + esc(pkg.handling_reason || '—') +
+						'</li>';
+					}).join('');
+					var lines = [
+						'Metode: manuell Norgespakke',
+						'Ingen Logistra/Cargonizer-kall brukt: ja',
+						'Antall kolli: ' + (debug.number_of_packages !== undefined ? debug.number_of_packages : '—'),
+						'Total grunnfrakt: ' + (debug.total_base_freight || '—'),
+						'Total rabatt: ' + (debug.total_discount || '—'),
+						'Total håndtering: ' + (debug.total_handling || '—'),
+						'Drivstoff %: ' + (debug.fuel_percent || row.fuel_surcharge || '—'),
+						'Drivstoff (kr): ' + (debug.fuel_amount || row.recalculated_fuel_surcharge || '—'),
+						'Bomtillegg (kr): ' + (debug.toll_surcharge || row.toll_surcharge || '—'),
+						'MVA %: ' + (debug.vat_percent || row.vat_percent || '—'),
+						'Avrunding: ' + (debug.rounding_mode || row.rounding_mode || '—'),
+						'Sluttpris eks mva: ' + (debug.final_price_ex_vat || row.final_price_ex_vat || '—')
+					];
+					var html = '<div style="margin-top:4px;color:#646970;">' + esc(lines.join(' | ')) + '</div>' +
+						(packageHtml ? '<ul style="margin:8px 0 0 18px;">' + packageHtml + '</ul>' : '');
+					if (opts.asDetails === false) {
+						return html;
+					}
+					return '<details style="margin-top:6px;"><summary>'+esc(opts.summaryTitle || 'Debug')+'</summary>' + html + '</details>';
+				}
 				var asDetails = opts.asDetails !== false;
 				var summaryTitle = opts.summaryTitle || 'Debug';
 				var summary = row.request_summary || {};
@@ -1699,6 +1795,7 @@ class LP_Cargonizer_Connector {
 
 		$settings = $this->get_settings();
 		$options = isset($settings['available_methods']) && is_array($settings['available_methods']) ? $settings['available_methods'] : array();
+		$options = $this->ensure_internal_manual_methods($options);
 
 		$allowed_options = $this->filter_options_by_enabled_methods($options);
 		if (empty($allowed_options)) {
@@ -2311,11 +2408,15 @@ class LP_Cargonizer_Connector {
 	}
 
 	private function package_triggers_bring_manual_handling($package) {
+		return $this->package_triggers_manual_handling($package);
+	}
+
+
+	private function package_triggers_manual_handling($package) {
 		if (!is_array($package)) {
 			return false;
 		}
 
-		// Bring-regel: én side >120 cm eller minst to sider >60 cm.
 		$length = isset($package['length']) ? (float) $package['length'] : 0;
 		$width = isset($package['width']) ? (float) $package['width'] : 0;
 		$height = isset($package['height']) ? (float) $package['height'] : 0;
@@ -2346,7 +2447,7 @@ class LP_Cargonizer_Connector {
 		}
 
 		foreach ($packages as $package) {
-			if ($this->package_triggers_bring_manual_handling($package)) {
+			if ($this->package_triggers_manual_handling($package)) {
 				$result['package_count']++;
 			}
 		}
@@ -2354,6 +2455,145 @@ class LP_Cargonizer_Connector {
 		// 164 kr eks. mva per kolli som matcher Bring-regelen.
 		$result['fee'] = round($result['package_count'] * 164, 2);
 		$result['triggered'] = $result['package_count'] > 0;
+
+		return $result;
+	}
+
+
+	private function calculate_norgespakke_estimate($packages, $method_payload, $pricing_config) {
+		$result = array(
+			'status' => 'failed',
+			'error' => '',
+			'selected_price_source' => 'manual_norgespakke',
+			'selected_price_value' => '',
+			'original_list_price' => '',
+			'manual_handling_fee' => '0.00',
+			'bring_manual_handling_fee' => '0.00',
+			'total_handling_fee' => '0.00',
+			'bring_manual_handling_triggered' => false,
+			'bring_manual_handling_package_count' => 0,
+			'base_price' => '',
+			'discount_percent' => '',
+			'discounted_base' => '',
+			'fuel_surcharge' => '',
+			'recalculated_fuel_surcharge' => '',
+			'toll_surcharge' => '',
+			'handling_fee' => '',
+			'subtotal_ex_vat' => '',
+			'vat_percent' => '',
+			'price_incl_vat' => '',
+			'rounded_price' => '',
+			'final_price_ex_vat' => '',
+			'norgespakke_debug' => array(),
+		);
+
+		if (!is_array($packages) || empty($packages)) {
+			$result['error'] = 'Norgespakke krever minst ett kolli.';
+			return $result;
+		}
+
+		$discount_percent = isset($pricing_config['discount_percent']) ? $this->sanitize_discount_percent($pricing_config['discount_percent']) : 0;
+		$fuel_percent = isset($pricing_config['fuel_surcharge']) ? $this->sanitize_non_negative_number($pricing_config['fuel_surcharge']) : 0;
+		$toll_surcharge = isset($pricing_config['toll_surcharge']) ? $this->sanitize_non_negative_number($pricing_config['toll_surcharge']) : 0;
+		$vat_percent = isset($pricing_config['vat_percent']) ? $this->sanitize_non_negative_number($pricing_config['vat_percent']) : 0;
+		$rounding_mode = isset($pricing_config['rounding_mode']) ? $this->sanitize_rounding_mode($pricing_config['rounding_mode']) : 'none';
+
+		$package_rows = array();
+		$total_base = 0.0;
+		$total_handling = 0.0;
+		$handling_count = 0;
+
+		foreach ($packages as $idx => $package) {
+			$weight = isset($package['weight']) ? (float) $package['weight'] : 0;
+			$length = isset($package['length']) ? (float) $package['length'] : 0;
+			$width = isset($package['width']) ? (float) $package['width'] : 0;
+			$height = isset($package['height']) ? (float) $package['height'] : 0;
+			$name = isset($package['name']) && (string) $package['name'] !== '' ? (string) $package['name'] : (isset($package['description']) ? (string) $package['description'] : 'Kolli ' . ($idx + 1));
+			$description = isset($package['description']) ? (string) $package['description'] : '';
+
+			if ($weight <= 0) {
+				$result['error'] = 'Norgespakke-kolli ' . ($idx + 1) . ' har ugyldig eller manglende vekt. Vekt må være over 0 kg.';
+				return $result;
+			}
+			if ($weight > 35) {
+				$result['error'] = 'Norgespakke-kolli ' . ($idx + 1) . ' veier ' . number_format($weight, 2, '.', '') . ' kg og overskrider maksgrensen på 35 kg.';
+				return $result;
+			}
+
+			if ($weight <= 10) {
+				$base_price = 112.0;
+			} elseif ($weight <= 25) {
+				$base_price = 200.8;
+			} else {
+				$base_price = 268.0;
+			}
+
+			$handling_triggered = $this->package_triggers_manual_handling($package);
+			$handling_fee = $handling_triggered ? 164.0 : 0.0;
+			if ($handling_triggered) {
+				$handling_count++;
+			}
+
+			$total_base += $base_price;
+			$total_handling += $handling_fee;
+			$package_rows[] = array(
+				'package_number' => $idx + 1,
+				'name' => $name,
+				'description' => $description,
+				'weight' => number_format($weight, 2, '.', ''),
+				'length' => number_format($length, 2, '.', ''),
+				'width' => number_format($width, 2, '.', ''),
+				'height' => number_format($height, 2, '.', ''),
+				'base_price' => number_format($base_price, 2, '.', ''),
+				'handling_triggered' => $handling_triggered,
+				'handling_reason' => $handling_triggered ? 'Én side over 120 cm eller minst to sider over 60 cm.' : 'Ingen håndteringstrigger.',
+				'handling_fee' => number_format($handling_fee, 2, '.', ''),
+				'package_total' => number_format($base_price + $handling_fee, 2, '.', ''),
+			);
+		}
+
+		$discount_amount = $total_base * ($discount_percent / 100);
+		$discounted_base = $total_base - $discount_amount;
+		$fuel_amount = $discounted_base * ($fuel_percent / 100);
+		$subtotal_ex_vat = $discounted_base + $fuel_amount + $toll_surcharge + $total_handling;
+		$price_incl_vat = $subtotal_ex_vat * (1 + ($vat_percent / 100));
+		$rounded_price = $this->apply_rounding_mode($price_incl_vat, $rounding_mode);
+		$final_price_ex_vat = $vat_percent > 0 ? $rounded_price / (1 + ($vat_percent / 100)) : $rounded_price;
+
+		$result['status'] = 'ok';
+		$result['selected_price_value'] = number_format($total_base, 2, '.', '');
+		$result['original_list_price'] = number_format($total_base, 2, '.', '');
+		$result['base_price'] = number_format($total_base, 2, '.', '');
+		$result['discount_percent'] = number_format($discount_percent, 2, '.', '');
+		$result['discounted_base'] = number_format($discounted_base, 2, '.', '');
+		$result['fuel_surcharge'] = number_format($fuel_percent, 2, '.', '');
+		$result['recalculated_fuel_surcharge'] = number_format($fuel_amount, 2, '.', '');
+		$result['toll_surcharge'] = number_format($toll_surcharge, 2, '.', '');
+		$result['handling_fee'] = number_format($total_handling, 2, '.', '');
+		$result['total_handling_fee'] = number_format($total_handling, 2, '.', '');
+		$result['bring_manual_handling_fee'] = number_format($total_handling, 2, '.', '');
+		$result['bring_manual_handling_triggered'] = $handling_count > 0;
+		$result['bring_manual_handling_package_count'] = $handling_count;
+		$result['subtotal_ex_vat'] = number_format($subtotal_ex_vat, 2, '.', '');
+		$result['vat_percent'] = number_format($vat_percent, 2, '.', '');
+		$result['price_incl_vat'] = number_format($price_incl_vat, 2, '.', '');
+		$result['rounded_price'] = number_format($rounded_price, 2, '.', '');
+		$result['final_price_ex_vat'] = number_format($final_price_ex_vat, 2, '.', '');
+		$result['norgespakke_debug'] = array(
+			'method_type' => 'manual',
+			'api_calls_used' => false,
+			'number_of_packages' => count($packages),
+			'packages' => $package_rows,
+			'total_base_freight' => number_format($total_base, 2, '.', ''),
+			'total_discount' => number_format($discount_amount, 2, '.', ''),
+			'total_handling' => number_format($total_handling, 2, '.', ''),
+			'fuel_percent' => number_format($fuel_percent, 2, '.', ''),
+			'fuel_amount' => number_format($fuel_amount, 2, '.', ''),
+			'toll_surcharge' => number_format($toll_surcharge, 2, '.', ''),
+			'vat_percent' => number_format($vat_percent, 2, '.', ''),
+			'rounding_mode' => $rounding_mode,
+			'final_price_ex_vat' => number_format($final_price_ex_vat, 2, '.', ''),
+		);
 
 		return $result;
 	}
@@ -2543,6 +2783,7 @@ class LP_Cargonizer_Connector {
 				'use_sms_service' => !empty($method['use_sms_service']),
 				'sms_service_id' => isset($method['sms_service_id']) ? sanitize_text_field($method['sms_service_id']) : '',
 				'sms_service_name' => isset($method['sms_service_name']) ? sanitize_text_field($method['sms_service_name']) : '',
+				'is_manual' => !empty($method['is_manual']),
 			);
 			$method_key = implode('|', array($method_payload['agreement_id'], $method_payload['product_id']));
 			if (!isset($enabled_map[$method_key])) {
@@ -2555,21 +2796,10 @@ class LP_Cargonizer_Connector {
 				$method_payload['sms_service_name'] = $sms_service['service_name'];
 			}
 
-			$xml = $this->build_estimate_request_xml(array(
-				'recipient' => $recipient,
-				'packages' => $clean_packages,
-				'servicepartner' => $method_payload['servicepartner'],
-				'use_sms_service' => $method_payload['use_sms_service'],
-				'sms_service_id' => $method_payload['sms_service_id'],
-			), $method_payload);
-
-			$response = wp_remote_post('https://api.cargonizer.no/consignment_costs.xml', array(
-				'timeout' => 40,
-				'headers' => array_merge($this->get_auth_headers(), array('Content-Type' => 'application/xml')),
-				'body' => $xml,
-			));
-
 			$pricing_config = isset($method_pricing[$method_key]) && is_array($method_pricing[$method_key]) ? $method_pricing[$method_key] : $this->get_default_method_pricing();
+			if ($this->is_manual_norgespakke_method($method_payload)) {
+				$pricing_config['price_source'] = 'manual_norgespakke';
+			}
 			$discount_percent = isset($pricing_config['discount_percent']) ? $this->sanitize_discount_percent($pricing_config['discount_percent']) : 0;
 			$fuel_percent = isset($pricing_config['fuel_surcharge']) ? $this->sanitize_non_negative_number($pricing_config['fuel_surcharge']) : 0;
 			$toll_surcharge = isset($pricing_config['toll_surcharge']) ? $this->sanitize_non_negative_number($pricing_config['toll_surcharge']) : 0;
@@ -2654,6 +2884,7 @@ class LP_Cargonizer_Connector {
 				'parsed_error_message' => '',
 				'human_error' => '',
 				'raw_response' => '',
+				'norgespakke_debug' => array(),
 				'request_summary' => array(
 					'agreement_id' => $method_payload['agreement_id'],
 					'product_id' => $method_payload['product_id'],
@@ -2668,6 +2899,65 @@ class LP_Cargonizer_Connector {
 					'use_sms_service' => $method_payload['use_sms_service'],
 				),
 			);
+
+
+			if ($this->is_manual_norgespakke_method($method_payload)) {
+				$item['method_name'] = 'Posten - Norgespakke (manuell)';
+				$item['selected_price_source'] = 'manual_norgespakke';
+				$item['price_source_config'] = 'manual_norgespakke';
+				$item['configured_price_source_key'] = 'manual_norgespakke';
+				$item['actual_fallback_priority'] = array('manual_norgespakke');
+				$item['price_source_priority'] = array('manual_norgespakke');
+				$item['fallback_step_used'] = 1;
+				$item['raw_response'] = '';
+				$item['http_status'] = 0;
+				$manual_calculation = $this->calculate_norgespakke_estimate($clean_packages, $method_payload, $pricing_config);
+				$item['status'] = $manual_calculation['status'];
+				if (!empty($manual_calculation['error'])) {
+					$item['error'] = $manual_calculation['error'];
+					$item['parsed_error_message'] = $manual_calculation['error'];
+					$item['human_error'] = $manual_calculation['error'];
+				} else {
+					$item['selected_price_value'] = $manual_calculation['selected_price_value'];
+					$item['estimated_price'] = $manual_calculation['selected_price_value'];
+					$item['original_price'] = $manual_calculation['selected_price_value'];
+					$item['original_list_price'] = $manual_calculation['original_list_price'];
+					$item['manual_handling_fee'] = $manual_calculation['manual_handling_fee'];
+					$item['bring_manual_handling_fee'] = $manual_calculation['bring_manual_handling_fee'];
+					$item['total_handling_fee'] = $manual_calculation['total_handling_fee'];
+					$item['bring_manual_handling_triggered'] = !empty($manual_calculation['bring_manual_handling_triggered']);
+					$item['bring_manual_handling_package_count'] = isset($manual_calculation['bring_manual_handling_package_count']) ? (int) $manual_calculation['bring_manual_handling_package_count'] : 0;
+					$item['base_price'] = $manual_calculation['base_price'];
+					$item['discount_percent'] = $manual_calculation['discount_percent'];
+					$item['discounted_base'] = $manual_calculation['discounted_base'];
+					$item['fuel_surcharge'] = $manual_calculation['fuel_surcharge'];
+					$item['recalculated_fuel_surcharge'] = $manual_calculation['recalculated_fuel_surcharge'];
+					$item['toll_surcharge'] = $manual_calculation['toll_surcharge'];
+					$item['handling_fee'] = $manual_calculation['handling_fee'];
+					$item['subtotal_ex_vat'] = $manual_calculation['subtotal_ex_vat'];
+					$item['vat_percent'] = $manual_calculation['vat_percent'];
+					$item['price_incl_vat'] = $manual_calculation['price_incl_vat'];
+					$item['rounded_price'] = $manual_calculation['rounded_price'];
+					$item['final_price_ex_vat'] = $manual_calculation['final_price_ex_vat'];
+					$item['norgespakke_debug'] = isset($manual_calculation['norgespakke_debug']) ? $manual_calculation['norgespakke_debug'] : array();
+				}
+				$results[] = $item;
+				continue;
+			}
+
+			$xml = $this->build_estimate_request_xml(array(
+				'recipient' => $recipient,
+				'packages' => $clean_packages,
+				'servicepartner' => $method_payload['servicepartner'],
+				'use_sms_service' => $method_payload['use_sms_service'],
+				'sms_service_id' => $method_payload['sms_service_id'],
+			), $method_payload);
+
+			$response = wp_remote_post('https://api.cargonizer.no/consignment_costs.xml', array(
+				'timeout' => 40,
+				'headers' => array_merge($this->get_auth_headers(), array('Content-Type' => 'application/xml')),
+				'body' => $xml,
+			));
 
 			if (is_wp_error($response)) {
 				$item['error'] = $response->get_error_message();
@@ -2795,6 +3085,7 @@ class LP_Cargonizer_Connector {
 		}
 
 		$settings = $this->get_settings();
+		$settings['available_methods'] = $this->ensure_internal_manual_methods(isset($settings['available_methods']) ? $settings['available_methods'] : array());
 		$result   = null;
 		$method_refresh = null;
 
@@ -2841,7 +3132,7 @@ class LP_Cargonizer_Connector {
 		) {
 			$method_refresh = $this->fetch_transport_agreements();
 			if ($method_refresh['success']) {
-				$available_methods = $this->flatten_shipping_methods($method_refresh['data']);
+				$available_methods = $this->ensure_internal_manual_methods($this->flatten_shipping_methods($method_refresh['data']));
 				$enabled_map = array();
 				if (isset($settings['enabled_methods']) && is_array($settings['enabled_methods'])) {
 					foreach ($settings['enabled_methods'] as $saved_key) {
@@ -2960,6 +3251,7 @@ class LP_Cargonizer_Connector {
 											<option value="net" <?php selected($price_source, 'net'); ?>>Netto</option>
 											<option value="gross" <?php selected($price_source, 'gross'); ?>>Brutto</option>
 											<option value="fallback" <?php selected($price_source, 'fallback'); ?>>Automatisk fallback</option>
+										<option value="manual_norgespakke" <?php selected($price_source, 'manual_norgespakke'); ?>>Manuell Norgespakke</option>
 										</select>
 									</label>
 										<label style="display:flex;flex-direction:column;gap:4px;">
