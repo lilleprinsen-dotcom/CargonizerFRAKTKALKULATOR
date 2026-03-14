@@ -2335,6 +2335,13 @@ class LP_Cargonizer_Connector {
 		$result = array(
 			'status' => 'unknown',
 			'error' => '',
+			'original_list_price' => '',
+			'extracted_handling_fee' => '',
+			'extracted_toll_surcharge' => '',
+			'extracted_fuel_percent' => '',
+			'extracted_base_freight' => '',
+			'discounted_base_freight' => '',
+			'recalculated_fuel_surcharge' => '',
 			'base_price' => '',
 			'discount_percent' => '',
 			'discounted_base' => '',
@@ -2355,33 +2362,55 @@ class LP_Cargonizer_Connector {
 			return $result;
 		}
 
-		$base_price = $this->parse_price_to_number($value);
-		if ($base_price === null) {
+		$original_list_price = $this->parse_price_to_number($value);
+		if ($original_list_price === null) {
 			$result['status'] = 'price_parse_failed';
 			$result['error'] = 'Kunne ikke tolke valgt prisfelt (' . $source . ') som et tall. Viser kun original respons.';
 			return $result;
 		}
 
 		$discount_percent = isset($pricing_config['discount_percent']) ? $this->sanitize_discount_percent($pricing_config['discount_percent']) : 0;
-		$fuel_surcharge = isset($pricing_config['fuel_surcharge']) ? $this->sanitize_non_negative_number($pricing_config['fuel_surcharge']) : 0;
-		$toll_surcharge = isset($pricing_config['toll_surcharge']) ? $this->sanitize_non_negative_number($pricing_config['toll_surcharge']) : 0;
-		$handling_fee = isset($pricing_config['handling_fee']) ? $this->sanitize_non_negative_number($pricing_config['handling_fee']) : 0;
+		$extracted_fuel_percent = isset($pricing_config['fuel_surcharge']) ? $this->sanitize_non_negative_number($pricing_config['fuel_surcharge']) : 0;
+		$extracted_toll_surcharge = isset($pricing_config['toll_surcharge']) ? $this->sanitize_non_negative_number($pricing_config['toll_surcharge']) : 0;
+		$configured_handling_fee = isset($pricing_config['handling_fee']) ? $this->sanitize_non_negative_number($pricing_config['handling_fee']) : 0;
+		$handling_triggered = !empty($pricing_config['bring_manual_handling_triggered']);
+		$extracted_handling_fee = $handling_triggered ? $configured_handling_fee : 0;
 		$vat_percent = isset($pricing_config['vat_percent']) ? (float) $pricing_config['vat_percent'] : 0;
 		$rounding_mode = isset($pricing_config['rounding_mode']) ? $this->sanitize_rounding_mode($pricing_config['rounding_mode']) : 'none';
 
-		$discounted_base = $base_price - ($base_price * $discount_percent / 100);
-		$subtotal_ex_vat = $discounted_base + $fuel_surcharge + $toll_surcharge + $handling_fee;
+		// selected_price/value tolkes som listepris inkl. drivstoff, bom og ev. håndtering.
+		$list_minus_fixed_fees = $original_list_price - $extracted_handling_fee - $extracted_toll_surcharge;
+		if ($list_minus_fixed_fees < 0) {
+			$list_minus_fixed_fees = 0;
+		}
+
+		$fuel_multiplier = 1 + ($extracted_fuel_percent / 100);
+		if ($fuel_multiplier <= 0) {
+			$fuel_multiplier = 1;
+		}
+
+		$extracted_base_freight = $list_minus_fixed_fees / $fuel_multiplier;
+		$discounted_base_freight = $extracted_base_freight - ($extracted_base_freight * $discount_percent / 100);
+		$recalculated_fuel_surcharge = $discounted_base_freight * ($extracted_fuel_percent / 100);
+		$subtotal_ex_vat = $discounted_base_freight + $recalculated_fuel_surcharge + $extracted_toll_surcharge + $extracted_handling_fee;
 		$price_incl_vat = $subtotal_ex_vat * (1 + ($vat_percent / 100));
 		$rounded_price = $this->apply_rounding_mode($price_incl_vat, $rounding_mode);
 		$final_price_ex_vat = $vat_percent > 0 ? ($rounded_price / (1 + ($vat_percent / 100))) : $rounded_price;
 
 		$result['status'] = 'ok';
-		$result['base_price'] = number_format($base_price, 2, '.', '');
+		$result['original_list_price'] = number_format($original_list_price, 2, '.', '');
+		$result['extracted_handling_fee'] = number_format($extracted_handling_fee, 2, '.', '');
+		$result['extracted_toll_surcharge'] = number_format($extracted_toll_surcharge, 2, '.', '');
+		$result['extracted_fuel_percent'] = number_format($extracted_fuel_percent, 2, '.', '');
+		$result['extracted_base_freight'] = number_format($extracted_base_freight, 2, '.', '');
+		$result['discounted_base_freight'] = number_format($discounted_base_freight, 2, '.', '');
+		$result['recalculated_fuel_surcharge'] = number_format($recalculated_fuel_surcharge, 2, '.', '');
+		$result['base_price'] = number_format($extracted_base_freight, 2, '.', '');
 		$result['discount_percent'] = number_format($discount_percent, 2, '.', '');
-		$result['discounted_base'] = number_format($discounted_base, 2, '.', '');
-		$result['fuel_surcharge'] = number_format($fuel_surcharge, 2, '.', '');
-		$result['toll_surcharge'] = number_format($toll_surcharge, 2, '.', '');
-		$result['handling_fee'] = number_format($handling_fee, 2, '.', '');
+		$result['discounted_base'] = number_format($discounted_base_freight, 2, '.', '');
+		$result['fuel_surcharge'] = number_format($recalculated_fuel_surcharge, 2, '.', '');
+		$result['toll_surcharge'] = number_format($extracted_toll_surcharge, 2, '.', '');
+		$result['handling_fee'] = number_format($extracted_handling_fee, 2, '.', '');
 		$result['subtotal_ex_vat'] = number_format($subtotal_ex_vat, 2, '.', '');
 		$result['price_incl_vat'] = number_format($price_incl_vat, 2, '.', '');
 		$result['rounded_price'] = number_format($rounded_price, 2, '.', '');
@@ -2532,6 +2561,13 @@ class LP_Cargonizer_Connector {
 				'actual_fallback_priority' => array(),
 				'fallback_step_used' => 0,
 				'original_price' => '',
+				'original_list_price' => '',
+				'extracted_handling_fee' => '',
+				'extracted_toll_surcharge' => '',
+				'extracted_fuel_percent' => '',
+				'extracted_base_freight' => '',
+				'discounted_base_freight' => '',
+				'recalculated_fuel_surcharge' => '',
 				'discount_percent' => $discount_percent,
 				'discounted_base' => '',
 				'price_source_config' => isset($pricing_config['price_source']) ? $pricing_config['price_source'] : 'estimated',
@@ -2656,6 +2692,13 @@ class LP_Cargonizer_Connector {
 					$item['parsed_error_message'] = $this->parse_response_error_message($body);
 				}
 			} else {
+				$item['original_list_price'] = $calculated['original_list_price'];
+				$item['extracted_handling_fee'] = $calculated['extracted_handling_fee'];
+				$item['extracted_toll_surcharge'] = $calculated['extracted_toll_surcharge'];
+				$item['extracted_fuel_percent'] = $calculated['extracted_fuel_percent'];
+				$item['extracted_base_freight'] = $calculated['extracted_base_freight'];
+				$item['discounted_base_freight'] = $calculated['discounted_base_freight'];
+				$item['recalculated_fuel_surcharge'] = $calculated['recalculated_fuel_surcharge'];
 				$item['base_price'] = $calculated['base_price'];
 				$item['discount_percent'] = $calculated['discount_percent'];
 				$item['discounted_base'] = $calculated['discounted_base'];
