@@ -1049,7 +1049,7 @@ class LP_Cargonizer_Connector {
 					'Error type: ' + (row.error_type || '—'),
 					'Melding: ' + (row.parsed_error_message || row.error || '—'),
 					'Detaljer: ' + (row.error_details || '—'),
-					'Prisfelt brukt: ' + source + ' = ' + selectedValue,
+					'Prisfelt brukt som listepris/grunnlag: ' + source + ' = ' + selectedValue,
 					'Alternative prisfelt i respons: ' + (alternatives.length ? alternatives.join(', ') : 'ingen'),
 					'price_source_config: ' + (row.price_source_config || '—'),
 					'configured_price_source_key: ' + (row.configured_price_source_key || '—'),
@@ -1062,8 +1062,8 @@ class LP_Cargonizer_Connector {
 					'rounding_mode: ' + (row.rounding_mode || '—'),
 					'original_price: ' + (row.original_price || '—'),
 					'original_list_price: ' + (row.original_list_price || '—'),
-					'extracted_base_freight: ' + (row.extracted_base_freight || '—'),
-					'base_price: ' + (row.base_price || '—'),
+					'utledet_grunnfrakt: ' + (row.extracted_base_freight || '—'),
+					'beregningsgrunnlag_etter_utleding: ' + (row.base_price || '—'),
 					'discount_percent: ' + (row.discount_percent || '—'),
 					'discounted_base: ' + (row.discounted_base || '—'),
 					'fuel_percent: ' + (row.fuel_surcharge || '—') + '%',
@@ -1349,7 +1349,7 @@ class LP_Cargonizer_Connector {
 				}
 
 				var okRows = okResults.map(renderOkRow).join('');
-				var okTableHtml = '<table class="widefat striped"><thead><tr><th>Fraktmetode</th><th>Transportør</th><th>Grunnpris</th><th>Rabatt %</th><th>Pris etter rabatt</th><th>Drivstofftillegg (%)</th><th>Bomtillegg</th><th>Håndteringstillegg</th><th>Faktisk pris</th><th>Status</th></tr></thead><tbody>' +
+				var okTableHtml = '<table class="widefat striped"><thead><tr><th>Fraktmetode</th><th>Transportør</th><th>Listepris/grunnlag</th><th>Rabatt %</th><th>Utledet grunnfrakt etter rabatt</th><th>Drivstofftillegg (%)</th><th>Bomtillegg</th><th>Håndteringstillegg</th><th>Faktisk pris</th><th>Status</th></tr></thead><tbody>' +
 					(okRows || '<tr><td colspan="10"><em>Ingen vellykkede metoder.</em></td></tr>') +
 					'</tbody></table>';
 
@@ -2925,8 +2925,8 @@ class LP_Cargonizer_Connector {
 										</small>
 									</span>
 									<div style="display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:8px;align-items:end;min-width:620px;">
-										<label style="display:flex;flex-direction:column;gap:4px;">
-										<span>Prisfelt brukt</span><small style="color:#646970;">Hvilken pris fra Cargonizer som brukes som grunnpris.</small>
+									<label style="display:flex;flex-direction:column;gap:4px;">
+									<span>Prisfelt brukt</span><small style="color:#646970;">Hvilken pris fra Cargonizer som brukes som listepris/grunnlag for beregning.</small>
 										<select class="lp-cargonizer-method-input" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][price_source]" <?php disabled(!$is_enabled); ?>>
 											<option value="estimated" <?php selected($price_source, 'estimated'); ?>>Estimert</option>
 											<option value="net" <?php selected($price_source, 'net'); ?>>Netto</option>
@@ -2935,11 +2935,11 @@ class LP_Cargonizer_Connector {
 										</select>
 									</label>
 										<label style="display:flex;flex-direction:column;gap:4px;">
-											<span>Rabatt (%)</span><small style="color:#646970;">Rabatt trekkes kun fra grunnpris, ikke tillegg.</small>
+										<span>Rabatt (%)</span><small style="color:#646970;">Rabatt trekkes kun fra listepris/grunnlag, ikke tillegg.</small>
 											<input class="small-text lp-cargonizer-method-input" type="number" min="0" max="100" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][discount_percent]" value="<?php echo esc_attr($discount_value); ?>" <?php disabled(!$is_enabled); ?>>
 										</label>
 										<label style="display:flex;flex-direction:column;gap:4px;">
-											<span>Drivstofftillegg (%)</span><small style="color:#646970;">Prosent av grunnfrakt (brukes baklengs mot listepris).</small>
+											<span>Drivstofftillegg (%)</span><small style="color:#646970;">Prosent av utledet grunnfrakt (brukes baklengs mot listepris).</small>
 													<input class="small-text lp-cargonizer-method-input" type="number" min="0" step="0.01" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][fuel_surcharge]" value="<?php echo esc_attr($fuel_percent); ?>" <?php disabled(!$is_enabled); ?>>
 										</label>
 										<label style="display:flex;flex-direction:column;gap:4px;">
