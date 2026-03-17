@@ -1030,7 +1030,7 @@ class LP_Cargonizer_Connector {
 				row.style.cssText = 'border:1px solid #dcdcde;padding:10px 12px;margin-bottom:8px;background:#fff;box-shadow:0 1px 1px rgba(0,0,0,.03);';
 				row.innerHTML = '' +
 					'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">' +
-					'<strong>Kolli</strong><button type="button" class="button-link-delete lp-remove-colli">Fjern</button></div>' +
+					'<strong class="lp-colli-title">Kolli</strong><button type="button" class="button-link-delete lp-remove-colli">Fjern</button></div>' +
 					'<div style="display:grid;grid-template-columns:repeat(2,minmax(180px,1fr)) repeat(4,minmax(110px,1fr));gap:8px;margin-top:8px;align-items:end;">' +
 					'<label style="display:flex;flex-direction:column;gap:4px;">Navn<input type="text" class="regular-text lp-colli-name" data-colli-field="name" style="width:100%;" value="'+esc(pkg.name || '')+'"></label>' +
 					'<label style="display:flex;flex-direction:column;gap:4px;">Beskrivelse<input type="text" class="regular-text lp-colli-description" data-colli-field="description" style="width:100%;" value="'+esc(pkg.description || '')+'"></label>' +
@@ -1040,7 +1040,7 @@ class LP_Cargonizer_Connector {
 					'<label style="display:flex;flex-direction:column;gap:4px;">Høyde (cm)<input type="number" step="0.01" min="0" class="small-text lp-colli-height" data-colli-field="height" style="width:100%;" value="'+esc(pkg.height || '')+'"></label>' +
 					'</div>' +
 					'<div style="margin-top:8px;"><strong>Volum:</strong> <span class="lp-volume" data-colli-field="volume">0.000</span> dm³</div>';
-				row.querySelector('.lp-remove-colli').addEventListener('click', function(){ row.remove(); collectColliData(); });
+				row.querySelector('.lp-remove-colli').addEventListener('click', function(){ row.remove(); refreshColliRowTitles(); collectColliData(); });
 				row.querySelectorAll('[data-colli-field="weight"],[data-colli-field="length"],[data-colli-field="width"],[data-colli-field="height"]').forEach(function(input){
 					input.addEventListener('input', function(){
 						validateNumberField(input);
@@ -1054,7 +1054,18 @@ class LP_Cargonizer_Connector {
 				bindVolume(row);
 				validateColliRow(row);
 				colliList.appendChild(row);
+				refreshColliRowTitles();
 				collectColliData();
+			}
+
+			function refreshColliRowTitles(){
+				var rows = colliList.querySelectorAll('.lp-colli-row');
+				rows.forEach(function(row, idx){
+					var title = row.querySelector('.lp-colli-title');
+					if (title) {
+						title.textContent = formatColliTitle(idx + 1);
+					}
+				});
 			}
 
 
@@ -1192,6 +1203,78 @@ class LP_Cargonizer_Connector {
 				return debug.packages;
 			}
 
+			function formatColliTitle(indexOrNumber){
+				var parsed = parseInt(indexOrNumber, 10);
+				var number = (!isNaN(parsed) && parsed > 0) ? parsed : 1;
+				return 'Kolli ' + number;
+			}
+
+			function buildColliLineHtml(pkg, displayNumber){
+				var packageData = pkg || {};
+				var colliTitle = formatColliTitle(displayNumber);
+				var nameOrDescription = packageData.name || packageData.description || colliTitle;
+				var weight = (packageData.weight !== undefined && packageData.weight !== null && packageData.weight !== '') ? packageData.weight : '0';
+				var length = (packageData.length !== undefined && packageData.length !== null && packageData.length !== '') ? packageData.length : '0';
+				var width = (packageData.width !== undefined && packageData.width !== null && packageData.width !== '') ? packageData.width : '0';
+				var height = (packageData.height !== undefined && packageData.height !== null && packageData.height !== '') ? packageData.height : '0';
+				return '<li style="margin-bottom:4px;">' +
+					esc(colliTitle) + ': ' + esc(nameOrDescription) + ', ' + esc(weight) + ' kg, ' + esc(length) + 'x' + esc(width) + 'x' + esc(height) + ' cm' +
+				'</li>';
+			}
+
+			function renderOptimizedShipmentBreakdown(row){
+				if (!row || row.optimized_partition_used !== true) { return ''; }
+				if (!Array.isArray(row.optimized_shipments) || !row.optimized_shipments.length) { return ''; }
+				if (!row.optimized_shipment_count || row.optimized_shipment_count <= 1) { return ''; }
+
+				var shipmentSections = row.optimized_shipments.map(function(shipment, shipmentIdx){
+					var shipmentData = shipment || {};
+					var packagesSummary = Array.isArray(shipmentData.packages_summary) ? shipmentData.packages_summary : [];
+					var packageIndexes = Array.isArray(shipmentData.package_indexes) ? shipmentData.package_indexes : [];
+					var priceText = shipmentData.final_price_ex_vat !== undefined && shipmentData.final_price_ex_vat !== null && shipmentData.final_price_ex_vat !== ''
+						? shipmentData.final_price_ex_vat
+						: (shipmentData.rounded_price !== undefined && shipmentData.rounded_price !== null && shipmentData.rounded_price !== '' ? shipmentData.rounded_price : '');
+					var shipmentHeader = '<div style="font-weight:600;color:#1d2327;">Delsendelse ' + esc(shipmentIdx + 1) + (priceText !== '' ? ' <span style="font-weight:400;color:#646970;">(' + esc(priceText) + ' kr)</span>' : '') + '</div>';
+					var packageLines = '';
+					if (packagesSummary.length) {
+						packageLines = packagesSummary.map(function(pkg, pkgIdx){
+							var globalNumber = null;
+							if (packageIndexes.length > pkgIdx) {
+								var parsedIndex = parseInt(packageIndexes[pkgIdx], 10);
+								if (!isNaN(parsedIndex) && parsedIndex >= 0) {
+									globalNumber = parsedIndex + 1;
+								}
+							}
+							var displayNumber = globalNumber !== null ? globalNumber : (pkgIdx + 1);
+							return buildColliLineHtml(pkg, displayNumber);
+						}).join('');
+						packageLines = '<ul style="margin:4px 0 0 18px;">' + packageLines + '</ul>';
+					} else if (packageIndexes.length) {
+						var indexesText = packageIndexes.map(function(packageIndex){
+							var parsedIndex = parseInt(packageIndex, 10);
+							if (isNaN(parsedIndex) || parsedIndex < 0) {
+								return '';
+							}
+							return formatColliTitle(parsedIndex + 1);
+						}).filter(function(item){ return !!item; }).join(', ');
+						packageLines = indexesText
+							? '<div style="margin-top:4px;color:#50575e;">' + esc(indexesText) + '</div>'
+							: '<div style="margin-top:4px;color:#50575e;">Ingen kollidetaljer tilgjengelig.</div>';
+					} else {
+						packageLines = '<div style="margin-top:4px;color:#50575e;">Ingen kollidetaljer tilgjengelig.</div>';
+					}
+
+					return '<div style="margin-top:6px;padding-top:6px;border-top:1px dashed #dcdcde;">' + shipmentHeader + packageLines + '</div>';
+				}).join('');
+
+				if (!shipmentSections) { return ''; }
+
+				return '<details style="margin-top:6px;">' +
+					'<summary style="cursor:pointer;">Vis kollioppdeling</summary>' +
+					'<div style="margin-top:6px;padding:8px 10px;border:1px solid #dcdcde;background:#f6f7f7;border-radius:4px;font-size:12px;line-height:1.5;">' + shipmentSections + '</div>' +
+				'</details>';
+			}
+
 			function renderManualNorgespakkeSummary(row, options){
 				var packages = getManualNorgespakkePackages(row);
 				if (!packages.length) { return ''; }
@@ -1202,14 +1285,14 @@ class LP_Cargonizer_Connector {
 					? 'margin-top:6px;padding:8px 10px;border:1px solid #dcdcde;background:#f6f7f7;border-radius:4px;font-size:12px;line-height:1.5;'
 					: 'margin-top:8px;padding:10px 12px;border:1px solid #dcdcde;background:#f6f7f7;border-radius:4px;line-height:1.5;';
 				var lines = packages.map(function(pkg, idx){
-					var number = pkg.package_number || (idx + 1);
+					var number = idx + 1;
 					var weight = (pkg.weight !== undefined && pkg.weight !== null && pkg.weight !== '') ? pkg.weight : '0';
 					var length = (pkg.length !== undefined && pkg.length !== null && pkg.length !== '') ? pkg.length : '0';
 					var width = (pkg.width !== undefined && pkg.width !== null && pkg.width !== '') ? pkg.width : '0';
 					var height = (pkg.height !== undefined && pkg.height !== null && pkg.height !== '') ? pkg.height : '0';
 					var hasSize = parseFloat(length) > 0 || parseFloat(width) > 0 || parseFloat(height) > 0;
 					var sizeText = hasSize ? (' – ' + length + 'x' + width + 'x' + height + ' cm') : '';
-					return '<li style="margin-bottom:4px;">Kolli ' + esc(number) + ' – ' + esc(weight) + ' kg' + esc(sizeText) + '</li>';
+					return '<li style="margin-bottom:4px;">' + esc(formatColliTitle(number)) + ' – ' + esc(weight) + ' kg' + esc(sizeText) + '</li>';
 				}).join('');
 				return '<div style="' + wrapperStyle + '">' +
 					'<div style="font-weight:600;margin-bottom:4px;">' + esc(title) + ': ' + esc(packages.length) + ' kolli</div>' +
@@ -1224,9 +1307,13 @@ class LP_Cargonizer_Connector {
 				if (isManualNorgespakke) {
 					var debug = row.norgespakke_debug || {};
 					var packageRows = getManualNorgespakkePackages(row);
-					var packageHtml = packageRows.map(function(pkg){
+					var packageHtml = packageRows.map(function(pkg, idx){
+						var packageNumber = parseInt(pkg.package_number, 10);
+						if (isNaN(packageNumber) || packageNumber < 1) {
+							packageNumber = idx + 1;
+						}
 						return '<li style="margin-bottom:6px;">' +
-							'Kolli ' + esc(pkg.package_number || '—') + ': ' + esc(pkg.name || pkg.description || '—') +
+							esc(formatColliTitle(packageNumber)) + ': ' + esc(pkg.name || pkg.description || '—') +
 							' | vekt ' + esc(pkg.weight || '0') + ' kg' +
 							' | LxBxH ' + esc(pkg.length || '0') + 'x' + esc(pkg.width || '0') + 'x' + esc(pkg.height || '0') + ' cm' +
 							' | grunnpris ' + esc(pkg.base_price || '0') + ' kr' +
@@ -1680,9 +1767,16 @@ class LP_Cargonizer_Connector {
 					} else if (row.optimization_state === 'failed') {
 						optimizationInfo = '<div style="margin-top:6px;color:#b32d2e;font-weight:600;">Optimalisering feilet, baseline beholdt.</div>';
 					}
+					var showOptimizedBreakdown = row.optimized_partition_used === true &&
+						(row.optimized_shipment_count || 0) > 1 &&
+						Array.isArray(row.optimized_shipments) &&
+						row.optimized_shipments.length > 0 &&
+						row.optimization_state === 'done' &&
+						!!(row.optimization_debug && row.optimization_debug.optimization_changed_result);
+					var optimizedBreakdownHtml = showOptimizedBreakdown ? renderOptimizedShipmentBreakdown(row) : '';
 					var detailsHtml = '<details><summary>Vis beregning</summary>' + renderEstimateDebug(row, { asDetails: false }) + '</details>';
 					return '<tr>' +
-					'<td>'+esc(row.method_name || row.product_id || 'Ukjent metode') + packageSummaryHtml + multiShipmentInfo + optimizationInfo + '</td>' +
+					'<td>'+esc(row.method_name || row.product_id || 'Ukjent metode') + packageSummaryHtml + multiShipmentInfo + optimizationInfo + optimizedBreakdownHtml + '</td>' +
 					'<td>'+esc(formatDeliveryMode(row))+'</td>' +
 					'<td>'+esc(listPriceText)+'</td>' +
 					'<td>'+esc(discountPercentText)+'</td>' +
