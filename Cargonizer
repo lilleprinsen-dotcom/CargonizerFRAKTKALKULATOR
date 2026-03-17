@@ -1429,7 +1429,7 @@ class LP_Cargonizer_Connector {
 				if (row.optimization_state === 'pending') {
 					optimizationStateText = 'Baseline vist. Optimaliserer kombinasjoner...';
 				} else if (row.optimization_state === 'done') {
-					optimizationStateText = (optimization && optimization.optimization_changed_result) ? 'Optimalisering fant bedre løsning' : 'Optimalisering fant ikke bedre løsning';
+					optimizationStateText = (optimization && optimization.optimization_found_better_price) ? 'Optimalisering fant bedre løsning' : 'Optimalisering fant ikke bedre løsning';
 				} else if (row.optimization_state === 'failed') {
 					optimizationStateText = 'Optimalisering feilet, baseline beholdt';
 				}
@@ -1443,7 +1443,11 @@ class LP_Cargonizer_Connector {
 						var baselineLabel = variant.is_baseline ? 'baseline/samlet' : ('partition #' + variant.partition_index);
 						return '<li style="margin-bottom:6px;">Variant ' + esc(baselineLabel) + (variant.is_winner ? ' (vinner)' : '') + ': delsendelser=' + esc(variant.shipment_count || 0) + ', status=' + esc(variant.status || '—') + ', total avrundet=' + esc(variant.total_rounded_price || '—') + ', total eks mva=' + esc(variant.total_final_price_ex_vat || '—') + (variant.error ? ', feil=' + esc(variant.error) : '') + (groupText ? '<div style="margin-top:4px;color:#646970;">' + esc(groupText) + '</div>' : '') + '</li>';
 					}).join('');
-					var changedText = optimization.optimization_changed_result ? 'ja' : 'nei';
+					var changedText = optimization.optimization_found_better_price ? 'ja' : 'nei';
+					var savingsText = optimization.optimization_savings_rounded !== undefined && optimization.optimization_savings_rounded !== '' ? optimization.optimization_savings_rounded : '0.00';
+					var savingsMessage = optimization.optimization_found_better_price
+						? ('Sparte ' + savingsText + ' kr eks mva ved optimalisering')
+						: 'Optimalisering fant ikke lavere pris enn samlet sending';
 					optimizationHtml = '<div style="margin-top:8px;padding:8px;border:1px solid #dcdcde;background:#f6f7f7;">'
 						+ '<strong>DSV-optimalisering</strong>: '
 						+ (optimizationStateText ? '<div style="margin-top:4px;font-weight:600;">' + esc(optimizationStateText) + '</div>' : '')
@@ -1456,8 +1460,11 @@ class LP_Cargonizer_Connector {
 						+ ', winner_final_ex_vat=' + esc(optimization.winner_total_final_price_ex_vat !== undefined ? optimization.winner_total_final_price_ex_vat : '—')
 						+ ', winner_rounded=' + esc(optimization.winner_total_rounded_price !== undefined ? optimization.winner_total_rounded_price : '—')
 						+ ', winner shipments=' + esc(optimization.winner_shipment_count !== undefined ? optimization.winner_shipment_count : '—')
+						+ ', baseline_final_ex_vat=' + esc(optimization.baseline_final_price_ex_vat !== undefined ? optimization.baseline_final_price_ex_vat : '—')
+						+ ', optimized_final_ex_vat=' + esc(optimization.optimized_final_price_ex_vat !== undefined ? optimization.optimized_final_price_ex_vat : '—')
+						+ ', savings_ex_vat=' + esc(optimization.optimization_savings_ex_vat !== undefined ? optimization.optimization_savings_ex_vat : '0.00')
 						+ ', changed_result=' + esc(changedText)
-						+ '<div style="margin-top:4px;font-weight:600;">Samlet DSV-estimat ble forsøkt først. Optimalisering endret resultat: ' + esc(changedText) + '.</div>'
+						+ '<div style="margin-top:4px;font-weight:600;">' + esc(savingsMessage) + '.</div>'
 						+ (variantRows ? '<ul style="margin:8px 0 0 18px;">' + variantRows + '</ul>' : '')
 						+ '</div>';
 				}
@@ -1769,7 +1776,11 @@ class LP_Cargonizer_Connector {
 					if (row.optimization_state === 'pending') {
 						optimizationInfo = '<div style="margin-top:6px;color:#125228;font-weight:600;">Baseline vist. Optimaliserer kombinasjoner...</div>';
 					} else if (row.optimization_state === 'done') {
-						optimizationInfo = '<div style="margin-top:6px;color:#125228;font-weight:600;">' + esc((row.optimization_debug && row.optimization_debug.optimization_changed_result) ? 'Optimalisering fant bedre løsning' : 'Optimalisering fant ikke bedre løsning') + '</div>';
+						var foundBetter = !!(row.optimization_debug && row.optimization_debug.optimization_found_better_price);
+						var savingsRounded = (row.optimization_debug && row.optimization_debug.optimization_savings_rounded !== undefined && row.optimization_debug.optimization_savings_rounded !== '')
+							? row.optimization_debug.optimization_savings_rounded
+							: (row.optimization_savings_rounded || '0.00');
+						optimizationInfo = '<div style="margin-top:6px;color:#125228;font-weight:600;">' + esc(foundBetter ? ('Sparte ' + savingsRounded + ' kr eks mva ved optimalisering') : 'Optimalisering fant ikke lavere pris enn samlet sending') + '</div>';
 					} else if (row.optimization_state === 'failed') {
 						optimizationInfo = '<div style="margin-top:6px;color:#b32d2e;font-weight:600;">Optimalisering feilet, baseline beholdt.</div>';
 					}
@@ -1778,7 +1789,7 @@ class LP_Cargonizer_Connector {
 						Array.isArray(row.optimized_shipments) &&
 						row.optimized_shipments.length > 0 &&
 						row.optimization_state === 'done' &&
-						!!(row.optimization_debug && row.optimization_debug.optimization_changed_result);
+						!!(row.optimization_debug && row.optimization_debug.optimization_found_better_price);
 					var optimizedBreakdownHtml = showOptimizedBreakdown ? renderOptimizedShipmentBreakdown(row) : '';
 					var detailsHtml = '<details><summary>Vis beregning</summary>' + renderEstimateDebug(row, { asDetails: false }) + '</details>';
 					return '<tr>' +
@@ -1909,6 +1920,9 @@ class LP_Cargonizer_Connector {
 								row.optimization_debug = row.optimization_debug || {};
 								row.optimization_debug.enabled = false;
 								row.optimization_debug.optimization_changed_result = false;
+								row.optimization_debug.optimization_found_better_price = false;
+								row.optimization_debug.optimization_savings_ex_vat = '0.00';
+								row.optimization_debug.optimization_savings_rounded = '0.00';
 								row.optimization_debug.reason = 'Optimalisering feilet, beholdt baseline-resultat.';
 							}
 							return row;
@@ -3546,9 +3560,13 @@ class LP_Cargonizer_Connector {
 	}
 
 	private function optimize_dsv_partition_estimates($packages, $recipient, $method_payload, $pricing_config, $baseline_estimate_result) {
-		$max_full_partition_packages = 5;
+		$max_full_partition_packages = 9;
 		$package_count = is_array($packages) ? count($packages) : 0;
 		$baseline_variant = $this->build_dsv_baseline_variant($baseline_estimate_result, $packages);
+		$baseline_total_final_price = null;
+		if (isset($baseline_variant['status']) && $baseline_variant['status'] === 'ok' && isset($baseline_variant['total_final_price_ex_vat']) && is_numeric($baseline_variant['total_final_price_ex_vat'])) {
+			$baseline_total_final_price = (float) $baseline_variant['total_final_price_ex_vat'];
+		}
 		$debug = array(
 			'enabled' => false,
 			'reason' => '',
@@ -3561,6 +3579,11 @@ class LP_Cargonizer_Connector {
 			'winner_total_rounded_price' => ($baseline_variant['status'] === 'ok') ? $baseline_variant['total_rounded_price'] : '',
 			'winner_shipment_count' => ($baseline_variant['status'] === 'ok') ? (int) $baseline_variant['shipment_count'] : 0,
 			'optimization_changed_result' => false,
+			'baseline_final_price_ex_vat' => $baseline_total_final_price !== null ? number_format($baseline_total_final_price, 2, '.', '') : '',
+			'optimized_final_price_ex_vat' => $baseline_total_final_price !== null ? number_format($baseline_total_final_price, 2, '.', '') : '',
+			'optimization_savings_ex_vat' => '0.00',
+			'optimization_savings_rounded' => '0.00',
+			'optimization_found_better_price' => false,
 			'variants' => array($baseline_variant),
 		);
 		$result = array('used' => false, 'winner' => $baseline_variant, 'debug' => $debug);
@@ -3617,6 +3640,26 @@ class LP_Cargonizer_Connector {
 		$result['debug']['winner_total_final_price_ex_vat'] = $winner['total_final_price_ex_vat'];
 		$result['debug']['winner_total_rounded_price'] = $winner['total_rounded_price'];
 		$result['debug']['winner_shipment_count'] = (int) $winner['shipment_count'];
+
+		$optimized_total_final_price = null;
+		if (isset($winner['status']) && $winner['status'] === 'ok' && isset($winner['total_final_price_ex_vat']) && is_numeric($winner['total_final_price_ex_vat'])) {
+			$optimized_total_final_price = (float) $winner['total_final_price_ex_vat'];
+		}
+		$result['debug']['optimized_final_price_ex_vat'] = $optimized_total_final_price !== null
+			? number_format($optimized_total_final_price, 2, '.', '')
+			: '';
+
+		if ($baseline_total_final_price !== null && $optimized_total_final_price !== null && $optimized_total_final_price < $baseline_total_final_price) {
+			$savings = $baseline_total_final_price - $optimized_total_final_price;
+			$result['debug']['optimization_found_better_price'] = true;
+			$result['debug']['optimization_savings_ex_vat'] = number_format($savings, 2, '.', '');
+			$result['debug']['optimization_savings_rounded'] = number_format($savings, 2, '.', '');
+		} else {
+			$result['debug']['optimization_found_better_price'] = false;
+			$result['debug']['optimization_savings_ex_vat'] = '0.00';
+			$result['debug']['optimization_savings_rounded'] = '0.00';
+		}
+		$result['debug']['optimization_changed_result'] = $result['debug']['optimization_found_better_price'];
 		return $result;
 	}
 
@@ -3814,6 +3857,11 @@ class LP_Cargonizer_Connector {
 				'optimized_shipments' => array(),
 				'optimization_debug' => array(),
 				'optimization_state' => '',
+				'baseline_final_price_ex_vat' => '',
+				'optimized_final_price_ex_vat' => '',
+				'optimization_savings_ex_vat' => '0.00',
+				'optimization_savings_rounded' => '0.00',
+				'optimization_found_better_price' => false,
 				'request_summary' => array(
 					'agreement_id' => $method_payload['agreement_id'],
 					'product_id' => $method_payload['product_id'],
@@ -3893,9 +3941,19 @@ class LP_Cargonizer_Connector {
 					'winner_total_rounded_price' => '',
 					'winner_shipment_count' => 0,
 					'optimization_changed_result' => false,
+					'baseline_final_price_ex_vat' => isset($item['final_price_ex_vat']) && $item['final_price_ex_vat'] !== '' ? $item['final_price_ex_vat'] : '',
+					'optimized_final_price_ex_vat' => isset($item['final_price_ex_vat']) && $item['final_price_ex_vat'] !== '' ? $item['final_price_ex_vat'] : '',
+					'optimization_savings_ex_vat' => '0.00',
+					'optimization_savings_rounded' => '0.00',
+					'optimization_found_better_price' => false,
 					'variants' => array($this->build_dsv_baseline_variant($baseline_estimate, $clean_packages)),
 				);
 				$item['optimization_state'] = 'pending';
+				$item['baseline_final_price_ex_vat'] = isset($item['optimization_debug']['baseline_final_price_ex_vat']) ? $item['optimization_debug']['baseline_final_price_ex_vat'] : '';
+				$item['optimized_final_price_ex_vat'] = isset($item['optimization_debug']['optimized_final_price_ex_vat']) ? $item['optimization_debug']['optimized_final_price_ex_vat'] : '';
+				$item['optimization_savings_ex_vat'] = '0.00';
+				$item['optimization_savings_rounded'] = '0.00';
+				$item['optimization_found_better_price'] = false;
 				$results[] = $item;
 				continue;
 			}
@@ -3906,6 +3964,11 @@ class LP_Cargonizer_Connector {
 				$dsv_optimization = $this->optimize_dsv_partition_estimates($clean_packages, $recipient, $method_payload, $pricing_config, $baseline_estimate);
 				$item['optimization_debug'] = isset($dsv_optimization['debug']) ? $dsv_optimization['debug'] : array();
 				$item['optimization_state'] = 'done';
+				$item['baseline_final_price_ex_vat'] = isset($item['optimization_debug']['baseline_final_price_ex_vat']) ? $item['optimization_debug']['baseline_final_price_ex_vat'] : '';
+				$item['optimized_final_price_ex_vat'] = isset($item['optimization_debug']['optimized_final_price_ex_vat']) ? $item['optimization_debug']['optimized_final_price_ex_vat'] : '';
+				$item['optimization_savings_ex_vat'] = isset($item['optimization_debug']['optimization_savings_ex_vat']) ? $item['optimization_debug']['optimization_savings_ex_vat'] : '0.00';
+				$item['optimization_savings_rounded'] = isset($item['optimization_debug']['optimization_savings_rounded']) ? $item['optimization_debug']['optimization_savings_rounded'] : '0.00';
+				$item['optimization_found_better_price'] = !empty($item['optimization_debug']['optimization_found_better_price']);
 				$winner = isset($dsv_optimization['winner']) && is_array($dsv_optimization['winner']) ? $dsv_optimization['winner'] : array();
 
 				if (!empty($winner) && isset($winner['status']) && $winner['status'] === 'ok' && !empty($dsv_optimization['used'])) {
@@ -4244,6 +4307,11 @@ class LP_Cargonizer_Connector {
 				'optimized_shipments' => array(),
 				'optimization_debug' => array(),
 				'optimization_state' => 'done',
+				'baseline_final_price_ex_vat' => '',
+				'optimized_final_price_ex_vat' => '',
+				'optimization_savings_ex_vat' => '0.00',
+				'optimization_savings_rounded' => '0.00',
+				'optimization_found_better_price' => false,
 				'request_summary' => array(
 					'agreement_id' => $method_payload['agreement_id'],
 					'product_id' => $method_payload['product_id'],
@@ -4266,6 +4334,11 @@ class LP_Cargonizer_Connector {
 
 			$dsv_optimization = $this->optimize_dsv_partition_estimates($clean_packages, $recipient, $method_payload, $pricing_config, $baseline_estimate);
 			$item['optimization_debug'] = isset($dsv_optimization['debug']) ? $dsv_optimization['debug'] : array();
+			$item['baseline_final_price_ex_vat'] = isset($item['optimization_debug']['baseline_final_price_ex_vat']) ? $item['optimization_debug']['baseline_final_price_ex_vat'] : '';
+			$item['optimized_final_price_ex_vat'] = isset($item['optimization_debug']['optimized_final_price_ex_vat']) ? $item['optimization_debug']['optimized_final_price_ex_vat'] : '';
+			$item['optimization_savings_ex_vat'] = isset($item['optimization_debug']['optimization_savings_ex_vat']) ? $item['optimization_debug']['optimization_savings_ex_vat'] : '0.00';
+			$item['optimization_savings_rounded'] = isset($item['optimization_debug']['optimization_savings_rounded']) ? $item['optimization_debug']['optimization_savings_rounded'] : '0.00';
+			$item['optimization_found_better_price'] = !empty($item['optimization_debug']['optimization_found_better_price']);
 			$winner = isset($dsv_optimization['winner']) && is_array($dsv_optimization['winner']) ? $dsv_optimization['winner'] : array();
 
 			if (!empty($winner) && isset($winner['status']) && $winner['status'] === 'ok') {
@@ -4293,9 +4366,15 @@ class LP_Cargonizer_Connector {
 				$item['optimization_state'] = 'failed';
 				$item['optimization_debug']['enabled'] = false;
 				$item['optimization_debug']['optimization_changed_result'] = false;
+				$item['optimization_debug']['optimization_found_better_price'] = false;
+				$item['optimization_debug']['optimization_savings_ex_vat'] = '0.00';
+				$item['optimization_debug']['optimization_savings_rounded'] = '0.00';
 				$item['optimization_debug']['reason'] = isset($item['optimization_debug']['reason']) && $item['optimization_debug']['reason'] !== ''
 					? $item['optimization_debug']['reason']
 					: 'Optimalisering feilet og baseline-estimatet var ikke gyldig.';
+				$item['optimization_found_better_price'] = false;
+				$item['optimization_savings_ex_vat'] = '0.00';
+				$item['optimization_savings_rounded'] = '0.00';
 				if ($item['error'] === '') {
 					$item['error'] = isset($item['optimization_debug']['reason']) ? $item['optimization_debug']['reason'] : 'DSV-optimalisering feilet.';
 					$item['parsed_error_message'] = $item['error'];
@@ -4304,9 +4383,15 @@ class LP_Cargonizer_Connector {
 				$item['optimization_state'] = 'failed';
 				$item['optimization_debug']['enabled'] = false;
 				$item['optimization_debug']['optimization_changed_result'] = false;
+				$item['optimization_debug']['optimization_found_better_price'] = false;
+				$item['optimization_debug']['optimization_savings_ex_vat'] = '0.00';
+				$item['optimization_debug']['optimization_savings_rounded'] = '0.00';
 				$item['optimization_debug']['reason'] = isset($item['optimization_debug']['reason']) && $item['optimization_debug']['reason'] !== ''
 					? $item['optimization_debug']['reason']
 					: 'Optimalisering feilet, beholdt baseline-resultat.';
+				$item['optimization_found_better_price'] = false;
+				$item['optimization_savings_ex_vat'] = '0.00';
+				$item['optimization_savings_rounded'] = '0.00';
 			}
 
 			$results[] = $item;
