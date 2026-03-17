@@ -1305,11 +1305,32 @@ class LP_Cargonizer_Connector {
 					'Pakker: ' + (packageText || '—'),
 					'Formel: ' + formulaText
 				];
+				var optimization = row.optimization_debug || null;
+				var optimizationHtml = '';
+				if (optimization && (optimization.enabled || optimization.reason || Array.isArray(optimization.variants))) {
+					var variants = Array.isArray(optimization.variants) ? optimization.variants : [];
+					var variantRows = variants.map(function(variant){
+						var groups = Array.isArray(variant.groups) ? variant.groups : [];
+						var groupText = groups.map(function(group){
+							return '[' + (Array.isArray(group.package_indexes) ? group.package_indexes.join(',') : '—') + '] status=' + (group.status || '—') + ', pris=' + (group.rounded_price || group.final_price_ex_vat || '—') + (group.error_code ? ', code=' + group.error_code : '');
+						}).join(' | ');
+						return '<li style="margin-bottom:6px;">Variant ' + esc(variant.partition_index) + (variant.is_winner ? ' (vinner)' : '') + ': delsendelser=' + esc(variant.shipment_count || 0) + ', status=' + esc(variant.status || '—') + ', total avrundet=' + esc(variant.total_rounded_price || '—') + ', total eks mva=' + esc(variant.total_final_price_ex_vat || '—') + (variant.error ? ', feil=' + esc(variant.error) : '') + (groupText ? '<div style="margin-top:4px;color:#646970;">' + esc(groupText) + '</div>' : '') + '</li>';
+					}).join('');
+					optimizationHtml = '<div style="margin-top:8px;padding:8px;border:1px solid #dcdcde;background:#f6f7f7;">'
+						+ '<strong>DSV-optimalisering</strong>: '
+						+ 'enabled=' + esc(optimization.enabled ? 'ja' : 'nei')
+						+ ', reason=' + esc(optimization.reason || '—')
+						+ ', combinations=' + esc(optimization.partitions_tested !== undefined ? optimization.partitions_tested : '—')
+						+ ', winner=' + esc(optimization.winner_partition_index !== undefined ? optimization.winner_partition_index : '—')
+						+ ', winner shipments=' + esc(optimization.winner_shipment_count !== undefined ? optimization.winner_shipment_count : '—')
+						+ (variantRows ? '<ul style="margin:8px 0 0 18px;">' + variantRows + '</ul>' : '')
+						+ '</div>';
+				}
 				var rawXml = shortRaw(row.raw_response || '', 1200);
-				if (!rawXml && !alternatives.length && !row.selected_price_source && !row.parsed_error_message && !row.error) {
+				if (!rawXml && !alternatives.length && !row.selected_price_source && !row.parsed_error_message && !row.error && !optimizationHtml) {
 					return '';
 				}
-				var debugContent = '<div style="margin-top:4px;color:#646970;">'+esc(fields.join(' | '))+'</div>' +
+				var debugContent = '<div style="margin-top:4px;color:#646970;">'+esc(fields.join(' | '))+'</div>' + optimizationHtml +
 					(rawXml ? '<pre style="white-space:pre-wrap;max-height:160px;overflow:auto;background:#f6f7f7;padding:8px;border:1px solid #dcdcde;margin-top:6px;">'+esc(rawXml)+'</pre>' : '');
 				if (!asDetails) {
 					return debugContent;
@@ -1595,9 +1616,12 @@ class LP_Cargonizer_Connector {
 						: (row.final_price_ex_vat !== '' && row.final_price_ex_vat !== undefined ? row.final_price_ex_vat : '—');
 					var statusText = row.status || 'unknown';
 					var packageSummaryHtml = renderManualNorgespakkeSummary(row, { compact: true, title: 'Kolli' });
+					var multiShipmentInfo = (row.optimized_partition_used && (row.optimized_shipment_count || 0) > 1)
+						? '<div style="margin-top:6px;color:#8a4b00;font-weight:600;">Optimalisert som ' + esc(row.optimized_shipment_count) + ' separate delsendelser (må bookes separat).</div>'
+						: '';
 					var detailsHtml = '<details><summary>Vis beregning</summary>' + renderEstimateDebug(row, { asDetails: false }) + '</details>';
 					return '<tr>' +
-					'<td>'+esc(row.method_name || row.product_id || 'Ukjent metode') + packageSummaryHtml + '</td>' +
+					'<td>'+esc(row.method_name || row.product_id || 'Ukjent metode') + packageSummaryHtml + multiShipmentInfo + '</td>' +
 					'<td>'+esc(formatDeliveryMode(row))+'</td>' +
 					'<td>'+esc(listPriceText)+'</td>' +
 					'<td>'+esc(discountPercentText)+'</td>' +
@@ -2581,6 +2605,67 @@ class LP_Cargonizer_Connector {
 		return strpos($carrier_id, 'bring') !== false || strpos($carrier_name, 'bring') !== false;
 	}
 
+	private function is_dsv_method($method_payload) {
+		if (!is_array($method_payload)) {
+			return false;
+		}
+
+		$carrier_id = isset($method_payload['carrier_id']) ? strtolower((string) $method_payload['carrier_id']) : '';
+		$carrier_name = isset($method_payload['carrier_name']) ? strtolower((string) $method_payload['carrier_name']) : '';
+
+		return strpos($carrier_id, 'dsv') !== false || strpos($carrier_name, 'dsv') !== false;
+	}
+
+	private function generate_package_index_partitions($package_indexes) {
+		$unique = array_values(array_unique(array_map('intval', is_array($package_indexes) ? $package_indexes : array())));
+		sort($unique);
+		$result = array();
+		$this->build_package_index_partitions_recursive($unique, 0, array(), $result);
+		return $result;
+	}
+
+	private function build_package_index_partitions_recursive($indexes, $position, $current_partition, &$all_partitions) {
+		if ($position >= count($indexes)) {
+			$normalized = $this->normalize_package_partition($current_partition);
+			if (!empty($normalized)) {
+				$all_partitions[] = $normalized;
+			}
+			return;
+		}
+
+		$index = $indexes[$position];
+		$group_count = count($current_partition);
+		for ($i = 0; $i < $group_count; $i++) {
+			$next = $current_partition;
+			$next[$i][] = $index;
+			$this->build_package_index_partitions_recursive($indexes, $position + 1, $next, $all_partitions);
+		}
+
+		$next = $current_partition;
+		$next[] = array($index);
+		$this->build_package_index_partitions_recursive($indexes, $position + 1, $next, $all_partitions);
+	}
+
+	private function normalize_package_partition($partition) {
+		$normalized = array();
+		if (!is_array($partition)) {
+			return $normalized;
+		}
+		foreach ($partition as $group) {
+			$clean_group = array_values(array_unique(array_map('intval', is_array($group) ? $group : array())));
+			sort($clean_group);
+			if (!empty($clean_group)) {
+				$normalized[] = $clean_group;
+			}
+		}
+		usort($normalized, function ($a, $b) {
+			$a_key = implode(',', $a);
+			$b_key = implode(',', $b);
+			return strcmp($a_key, $b_key);
+		});
+		return $normalized;
+	}
+
 	private function package_triggers_bring_manual_handling($package) {
 		return $this->package_triggers_manual_handling($package);
 	}
@@ -2885,6 +2970,261 @@ class LP_Cargonizer_Connector {
 		return $result;
 	}
 
+
+	private function build_packages_summary($packages) {
+		$summary = array();
+		if (!is_array($packages)) {
+			return $summary;
+		}
+		foreach ($packages as $package) {
+			$summary[] = array(
+				'name' => isset($package['name']) ? (string) $package['name'] : '',
+				'description' => isset($package['description']) ? (string) $package['description'] : '',
+				'weight' => isset($package['weight']) ? (float) $package['weight'] : 0,
+				'length' => isset($package['length']) ? (float) $package['length'] : 0,
+				'width' => isset($package['width']) ? (float) $package['width'] : 0,
+				'height' => isset($package['height']) ? (float) $package['height'] : 0,
+			);
+		}
+		return $summary;
+	}
+
+	private function run_consignment_estimate_for_packages($packages, $recipient, $method_payload, $pricing_config) {
+		$result = array(
+			'status' => 'failed',
+			'http_status' => 0,
+			'error' => '',
+			'error_code' => '',
+			'error_type' => '',
+			'error_details' => '',
+			'parsed_error_message' => '',
+			'raw_response' => '',
+			'estimated_cost' => '',
+			'gross_amount' => '',
+			'net_amount' => '',
+			'fallback_price' => '',
+			'selected_price_source' => '',
+			'selected_price_value' => '',
+			'configured_price_source_key' => '',
+			'price_source_fallback_used' => false,
+			'price_source_fallback_reason' => '',
+			'price_source_priority' => array(),
+			'actual_fallback_priority' => array(),
+			'fallback_step_used' => 0,
+			'calculated' => array(),
+		);
+
+		$xml = $this->build_estimate_request_xml(array(
+			'recipient' => $recipient,
+			'packages' => $packages,
+			'servicepartner' => isset($method_payload['servicepartner']) ? $method_payload['servicepartner'] : '',
+			'use_sms_service' => !empty($method_payload['use_sms_service']),
+			'sms_service_id' => isset($method_payload['sms_service_id']) ? $method_payload['sms_service_id'] : '',
+		), $method_payload);
+
+		$response = wp_remote_post('https://api.cargonizer.no/consignment_costs.xml', array(
+			'timeout' => 40,
+			'headers' => array_merge($this->get_auth_headers(), array('Content-Type' => 'application/xml')),
+			'body' => $xml,
+		));
+
+		if (is_wp_error($response)) {
+			$result['error'] = $response->get_error_message();
+			$result['parsed_error_message'] = $result['error'];
+			return $result;
+		}
+
+		$status = wp_remote_retrieve_response_code($response);
+		$body = wp_remote_retrieve_body($response);
+		$result['http_status'] = $status;
+		$result['raw_response'] = $body;
+
+		if ($status < 200 || $status >= 300) {
+			$error_details = $this->parse_response_error_details($body);
+			$result['error_code'] = $error_details['code'];
+			$result['error_type'] = $error_details['type'];
+			$result['parsed_error_message'] = $error_details['message'];
+			$result['error_details'] = $error_details['details'];
+			$result['error'] = 'HTTP ' . $status;
+			if ($result['parsed_error_message'] !== '') {
+				$result['error'] .= ': ' . $result['parsed_error_message'];
+			}
+			return $result;
+		}
+
+		$price_fields = $this->parse_estimate_price_fields($body);
+		$result['estimated_cost'] = $price_fields['estimated_cost'];
+		$result['gross_amount'] = $price_fields['gross_amount'];
+		$result['net_amount'] = $price_fields['net_amount'];
+		$result['fallback_price'] = $price_fields['fallback_price'];
+
+		$source_config = isset($pricing_config['price_source']) ? $pricing_config['price_source'] : 'estimated';
+		$selected_price = $this->select_estimate_price_value($price_fields, $source_config);
+		$result['selected_price_source'] = $selected_price['source'];
+		$result['selected_price_value'] = $selected_price['value'];
+		$result['configured_price_source_key'] = isset($selected_price['configured_key']) ? $selected_price['configured_key'] : '';
+		$result['price_source_fallback_used'] = !empty($selected_price['used_fallback']);
+		$result['price_source_priority'] = isset($selected_price['fallback_priority']) ? $selected_price['fallback_priority'] : array();
+		$result['actual_fallback_priority'] = isset($selected_price['actual_fallback_priority']) ? $selected_price['actual_fallback_priority'] : array();
+		$result['fallback_step_used'] = isset($selected_price['fallback_step_used']) ? (int) $selected_price['fallback_step_used'] : 0;
+		if ($result['price_source_fallback_used']) {
+			$result['price_source_fallback_reason'] = 'Konfigurert kilde (' . $result['configured_price_source_key'] . ') manglet eller var tom. Brukte ' . ($result['selected_price_source'] !== '' ? $result['selected_price_source'] : 'ingen kilde') . '.';
+		}
+
+		$calculate_payload = array_merge($pricing_config, array(
+			'carrier_id' => isset($method_payload['carrier_id']) ? $method_payload['carrier_id'] : '',
+			'carrier_name' => isset($method_payload['carrier_name']) ? $method_payload['carrier_name'] : '',
+			'packages' => $packages,
+		));
+		$calculated = $this->calculate_estimate_from_price_source($selected_price, $calculate_payload);
+		$result['status'] = $calculated['status'];
+		if ($calculated['error'] !== '') {
+			$result['error'] = $calculated['error'];
+			if ($result['status'] === 'unknown') {
+				$result['parsed_error_message'] = $this->parse_response_error_message($body);
+			}
+			return $result;
+		}
+
+		$result['calculated'] = $calculated;
+		return $result;
+	}
+
+	private function evaluate_dsv_partition($partition, $all_packages, $recipient, $method_payload, $pricing_config, $partition_index) {
+		$variant = array(
+			'partition_index' => (int) $partition_index,
+			'shipment_count' => count($partition),
+			'status' => 'ok',
+			'is_winner' => false,
+			'total_final_price_ex_vat' => '',
+			'total_rounded_price' => '',
+			'error' => '',
+			'groups' => array(),
+		);
+		$total_final = 0.0;
+		$total_rounded = 0.0;
+
+		foreach ($partition as $group_indexes) {
+			$group_packages = array();
+			foreach ($group_indexes as $package_index) {
+				if (isset($all_packages[$package_index])) {
+					$group_packages[] = $all_packages[$package_index];
+				}
+			}
+			$group_bring = $this->get_bring_manual_handling_fee($group_packages, $method_payload);
+			$group_manual_fee = isset($pricing_config['manual_handling_fee']) ? $this->sanitize_non_negative_number($pricing_config['manual_handling_fee']) : 0;
+			$group_bring_fee = isset($group_bring['fee']) ? $this->sanitize_non_negative_number($group_bring['fee']) : 0;
+			$group_pricing = $pricing_config;
+			$group_pricing['bring_manual_handling_fee'] = $group_bring_fee;
+			$group_pricing['bring_manual_handling_triggered'] = !empty($group_bring['triggered']);
+			$group_pricing['bring_manual_handling_package_count'] = isset($group_bring['package_count']) ? (int) $group_bring['package_count'] : 0;
+			$group_pricing['handling_fee'] = round($group_manual_fee + $group_bring_fee, 2);
+
+			$group_result = $this->run_consignment_estimate_for_packages($group_packages, $recipient, $method_payload, $group_pricing);
+			$group_debug = array(
+				'package_indexes' => $group_indexes,
+				'packages_summary' => $this->build_packages_summary($group_packages),
+				'status' => $group_result['status'],
+				'http_status' => $group_result['http_status'],
+				'selected_price_source' => $group_result['selected_price_source'],
+				'selected_price_value' => $group_result['selected_price_value'],
+				'final_price_ex_vat' => '',
+				'rounded_price' => '',
+				'raw_response' => $group_result['raw_response'],
+				'parsed_error_message' => $group_result['parsed_error_message'],
+				'error_code' => $group_result['error_code'],
+				'error_type' => $group_result['error_type'],
+				'error_details' => $group_result['error_details'],
+				'error' => $group_result['error'],
+			);
+
+			if (!empty($group_result['calculated'])) {
+				$group_debug['final_price_ex_vat'] = isset($group_result['calculated']['final_price_ex_vat']) ? $group_result['calculated']['final_price_ex_vat'] : '';
+				$group_debug['rounded_price'] = isset($group_result['calculated']['rounded_price']) ? $group_result['calculated']['rounded_price'] : '';
+				$total_final += (float) $group_debug['final_price_ex_vat'];
+				$total_rounded += (float) $group_debug['rounded_price'];
+			} else {
+				$variant['status'] = 'failed';
+				$variant['error'] = $group_result['error'] !== '' ? $group_result['error'] : 'Kunne ikke beregne pris for en delsendelse.';
+			}
+
+			$variant['groups'][] = $group_debug;
+		}
+
+		if ($variant['status'] === 'ok') {
+			$variant['total_final_price_ex_vat'] = number_format($total_final, 2, '.', '');
+			$variant['total_rounded_price'] = number_format($total_rounded, 2, '.', '');
+		}
+
+		return $variant;
+	}
+
+	private function optimize_dsv_partition_estimates($packages, $recipient, $method_payload, $pricing_config) {
+		$max_full_partition_packages = 5;
+		$package_count = is_array($packages) ? count($packages) : 0;
+		$debug = array(
+			'enabled' => false,
+			'reason' => '',
+			'package_count' => $package_count,
+			'partitions_tested' => 0,
+			'winner_partition_index' => -1,
+			'winner_total_final_price_ex_vat' => '',
+			'winner_total_rounded_price' => '',
+			'winner_shipment_count' => 0,
+			'variants' => array(),
+		);
+		$result = array('used' => false, 'winner' => array(), 'debug' => $debug);
+
+		if (!$this->is_dsv_method($method_payload)) {
+			$result['debug']['reason'] = 'Hoppet over: metoden er ikke DSV.';
+			return $result;
+		}
+		if ($package_count <= 1) {
+			$result['debug']['reason'] = 'Hoppet over: krever mer enn 1 kolli.';
+			return $result;
+		}
+		if ($package_count > $max_full_partition_packages) {
+			$result['debug']['reason'] = 'Hoppet over: antall kolli (' . $package_count . ') overstiger sikkerhetsgrense på ' . $max_full_partition_packages . ' for full partition-testing.';
+			return $result;
+		}
+
+		$partitions = $this->generate_package_index_partitions(range(0, $package_count - 1));
+		$result['debug']['enabled'] = true;
+		$result['debug']['reason'] = 'DSV-optimalisering kjørt.';
+		$result['debug']['partitions_tested'] = count($partitions);
+		$winner = null;
+		$winner_rank = null;
+		foreach ($partitions as $partition_index => $partition) {
+			$variant = $this->evaluate_dsv_partition($partition, $packages, $recipient, $method_payload, $pricing_config, $partition_index);
+			$result['debug']['variants'][] = $variant;
+			if ($variant['status'] !== 'ok') {
+				continue;
+			}
+			$is_all_together = count($partition) === 1 ? 1 : 0;
+			$rank = array((float) $variant['total_final_price_ex_vat'], (int) $variant['shipment_count'], -$is_all_together, $partition_index);
+			if ($winner === null || $rank < $winner_rank) {
+				$winner = $variant;
+				$winner_rank = $rank;
+			}
+		}
+
+		if ($winner === null) {
+			$result['debug']['reason'] = 'DSV-optimalisering feilet: ingen gyldige partitions.';
+			return $result;
+		}
+
+		foreach ($result['debug']['variants'] as $idx => $variant) {
+			$result['debug']['variants'][$idx]['is_winner'] = ((int) $variant['partition_index'] === (int) $winner['partition_index']);
+		}
+		$result['used'] = true;
+		$result['winner'] = $winner;
+		$result['debug']['winner_partition_index'] = (int) $winner['partition_index'];
+		$result['debug']['winner_total_final_price_ex_vat'] = $winner['total_final_price_ex_vat'];
+		$result['debug']['winner_total_rounded_price'] = $winner['total_rounded_price'];
+		$result['debug']['winner_shipment_count'] = (int) $winner['shipment_count'];
+		return $result;
+	}
+
 	private function parse_estimated_price($body) {
 		$price_fields = $this->parse_estimate_price_fields($body);
 		$selected = $this->select_estimate_price_value($price_fields);
@@ -3065,6 +3405,10 @@ class LP_Cargonizer_Connector {
 				'human_error' => '',
 				'raw_response' => '',
 				'norgespakke_debug' => array(),
+				'optimized_partition_used' => false,
+				'optimized_shipment_count' => 0,
+				'optimized_shipments' => array(),
+				'optimization_debug' => array(),
 				'request_summary' => array(
 					'agreement_id' => $method_payload['agreement_id'],
 					'product_id' => $method_payload['product_id'],
@@ -3126,6 +3470,39 @@ class LP_Cargonizer_Connector {
 				$results[] = $item;
 				continue;
 			}
+
+
+			$dsv_optimization = $this->optimize_dsv_partition_estimates($clean_packages, $recipient, $method_payload, $pricing_config);
+			$item['optimization_debug'] = $dsv_optimization['debug'];
+			if (!empty($dsv_optimization['debug']['enabled'])) {
+				if ($dsv_optimization['used']) {
+					$winner = $dsv_optimization['winner'];
+					$item['optimized_partition_used'] = true;
+					$item['optimized_shipment_count'] = isset($winner['shipment_count']) ? (int) $winner['shipment_count'] : 0;
+					$item['optimized_shipments'] = isset($winner['groups']) ? $winner['groups'] : array();
+					$item['status'] = 'ok';
+					$item['selected_price_source'] = 'optimized_partition';
+					$item['selected_price_value'] = $winner['total_final_price_ex_vat'];
+					$item['estimated_price'] = $winner['total_final_price_ex_vat'];
+					$item['original_price'] = $winner['total_final_price_ex_vat'];
+					$item['original_list_price'] = $winner['total_final_price_ex_vat'];
+					$item['price_source_priority'] = array('optimized_partition');
+					$item['actual_fallback_priority'] = array('optimized_partition');
+					$item['configured_price_source_key'] = 'optimized_partition';
+					$item['fallback_step_used'] = 1;
+					$item['subtotal_ex_vat'] = $winner['total_final_price_ex_vat'];
+					$item['final_price_ex_vat'] = $winner['total_final_price_ex_vat'];
+					$item['rounded_price'] = $winner['total_rounded_price'];
+					$item['price_incl_vat'] = $winner['total_rounded_price'];
+				} else {
+					$item['status'] = 'failed';
+					$item['error'] = isset($dsv_optimization['debug']['reason']) ? $dsv_optimization['debug']['reason'] : 'DSV-optimalisering feilet.';
+					$item['parsed_error_message'] = $item['error'];
+				}
+				$results[] = $item;
+				continue;
+			}
+
 
 			$xml = $this->build_estimate_request_xml(array(
 				'recipient' => $recipient,
