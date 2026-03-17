@@ -2068,10 +2068,10 @@ class LP_Cargonizer_Connector {
 		}
 
 		$settings = $this->get_settings();
-		$options = isset($settings['available_methods']) && is_array($settings['available_methods']) ? $settings['available_methods'] : array();
-		$options = $this->ensure_internal_manual_methods($options);
+		$available_methods = isset($settings['available_methods']) && is_array($settings['available_methods']) ? $settings['available_methods'] : array();
+		$available_methods = $this->ensure_internal_manual_methods($available_methods);
 
-		$allowed_options = $this->filter_options_by_enabled_methods($options);
+		$allowed_options = $this->filter_options_by_enabled_methods($available_methods);
 		if (empty($allowed_options)) {
 			wp_send_json_error(array('message' => 'Ingen fraktmetoder er aktivert. Gå til WooCommerce → Cargonizer og aktiver minst én fraktmetode.'), 400);
 		}
