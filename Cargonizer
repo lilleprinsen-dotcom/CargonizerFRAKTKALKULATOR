@@ -2067,7 +2067,14 @@ class LP_Cargonizer_Connector {
 			wp_send_json_error(array('message' => 'Ugyldig nonce.'), 403);
 		}
 
-		$allowed_options = array($this->get_manual_norgespakke_method());
+		$settings = $this->get_settings();
+		$options = isset($settings['available_methods']) && is_array($settings['available_methods']) ? $settings['available_methods'] : array();
+		$options = $this->ensure_internal_manual_methods($options);
+
+		$allowed_options = $this->filter_options_by_enabled_methods($options);
+		if (empty($allowed_options)) {
+			wp_send_json_error(array('message' => 'Ingen fraktmetoder er aktivert. Gå til WooCommerce → Cargonizer og aktiver minst én fraktmetode.'), 400);
+		}
 
 		$method_pricing = $this->get_enabled_method_pricing();
 		foreach ($allowed_options as &$option) {
