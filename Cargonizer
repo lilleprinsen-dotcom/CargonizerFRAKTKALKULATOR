@@ -97,7 +97,8 @@ class LP_Cargonizer_Connector {
 				'carrier_name' => isset($method['carrier_name']) ? sanitize_text_field((string) $method['carrier_name']) : '',
 				'product_id' => isset($method['product_id']) ? sanitize_text_field((string) $method['product_id']) : '',
 				'product_name' => isset($method['product_name']) ? sanitize_text_field((string) $method['product_name']) : '',
-				'is_manual' => !empty($method['is_manual']),
+				'is_manual' => ($method_key === self::MANUAL_NORGESPAKKE_KEY) && !empty($method['is_manual']),
+				'is_manual_norgespakke' => ($method_key === self::MANUAL_NORGESPAKKE_KEY),
 				'label' => isset($method['label']) ? sanitize_text_field((string) $method['label']) : '',
 				'services' => array(),
 			);
@@ -461,7 +462,11 @@ class LP_Cargonizer_Connector {
 			}
 
 			$key = isset($option['key']) ? (string) $option['key'] : '';
-			if ($key !== self::MANUAL_NORGESPAKKE_KEY) {
+			$agreement_id = isset($option['agreement_id']) ? (string) $option['agreement_id'] : '';
+			$product_id = isset($option['product_id']) ? (string) $option['product_id'] : '';
+			$is_internal_manual = ($key === self::MANUAL_NORGESPAKKE_KEY) || (($agreement_id . '|' . $product_id) === self::MANUAL_NORGESPAKKE_KEY);
+
+			if (!$is_internal_manual) {
 				$updated_options[] = $option;
 				continue;
 			}
@@ -484,12 +489,19 @@ class LP_Cargonizer_Connector {
 			return false;
 		}
 
+		$explicit_key = isset($method_payload['key']) ? trim((string) $method_payload['key']) : '';
 		$key = trim((string) (isset($method_payload['agreement_id']) ? $method_payload['agreement_id'] : '')) . '|' . trim((string) (isset($method_payload['product_id']) ? $method_payload['product_id'] : ''));
-		if ($key === self::MANUAL_NORGESPAKKE_KEY) {
+		$resolved_key = $explicit_key !== '' ? $explicit_key : $key;
+
+		if ($resolved_key === self::MANUAL_NORGESPAKKE_KEY || $key === self::MANUAL_NORGESPAKKE_KEY) {
 			return true;
 		}
 
-		return !empty($method_payload['is_manual']);
+		if (!empty($method_payload['is_manual_norgespakke']) || !empty($method_payload['is_manual'])) {
+			return $resolved_key === self::MANUAL_NORGESPAKKE_KEY || $key === self::MANUAL_NORGESPAKKE_KEY;
+		}
+
+		return false;
 	}
 
 	private function get_enabled_method_map() {
@@ -1060,6 +1072,7 @@ class LP_Cargonizer_Connector {
 					var label = option.label || ((option.agreement_name || '') + ' - ' + (option.product_name || ''));
 					var agreementText = option.agreement_description || option.agreement_name || option.agreement_id || '—';
 					var productText = option.product_name || option.product_id || '—';
+					var isManualNorgespakke = !!option.is_manual_norgespakke || (((option.agreement_id || '') + '|' + (option.product_id || '')) === 'manual|norgespakke');
 					var isManual = !!option.is_manual;
 					var deliveryToPickupPoint = !!option.delivery_to_pickup_point;
 					var deliveryToHome = !!option.delivery_to_home;
@@ -1080,7 +1093,7 @@ class LP_Cargonizer_Connector {
 						});
 					}
 					html += '<label style="display:flex;gap:10px;align-items:flex-start;padding:10px;border:1px solid #dcdcde;background:#fff;line-height:1.35;">' +
-						'<input type="checkbox" class="lp-shipping-option" data-agreement-id="'+esc(option.agreement_id || '')+'" data-agreement-name="'+esc(option.agreement_name || '')+'" data-agreement-description="'+esc(option.agreement_description || '')+'" data-agreement-number="'+esc(option.agreement_number || '')+'" data-carrier-id="'+esc(option.carrier_id || '')+'" data-carrier-name="'+esc(option.carrier_name || '')+'" data-product-id="'+esc(option.product_id || '')+'" data-product-name="'+esc(option.product_name || '')+'" data-is-manual="'+(isManual ? '1' : '')+'" data-delivery-to-pickup-point="'+(deliveryToPickupPoint ? '1' : '')+'" data-delivery-to-home="'+(deliveryToHome ? '1' : '')+'" data-sms-service-id="'+esc(smsServiceId)+'" data-sms-service-name="'+esc(smsServiceName)+'">' +
+						'<input type="checkbox" class="lp-shipping-option" data-method-key="'+esc(option.key || '')+'" data-agreement-id="'+esc(option.agreement_id || '')+'" data-agreement-name="'+esc(option.agreement_name || '')+'" data-agreement-description="'+esc(option.agreement_description || '')+'" data-agreement-number="'+esc(option.agreement_number || '')+'" data-carrier-id="'+esc(option.carrier_id || '')+'" data-carrier-name="'+esc(option.carrier_name || '')+'" data-product-id="'+esc(option.product_id || '')+'" data-product-name="'+esc(option.product_name || '')+'" data-is-manual="'+(isManual ? '1' : '')+'" data-is-manual-norgespakke="'+(isManualNorgespakke ? '1' : '')+'" data-delivery-to-pickup-point="'+(deliveryToPickupPoint ? '1' : '')+'" data-delivery-to-home="'+(deliveryToHome ? '1' : '')+'" data-sms-service-id="'+esc(smsServiceId)+'" data-sms-service-name="'+esc(smsServiceName)+'">' +
 						'<span style="display:flex;flex-direction:column;gap:3px;">' +
 							'<strong>'+esc(label)+(isManual ? ' <span style="font-weight:400;color:#646970;">(manuell)</span>' : '')+'</strong>' +
 							'<span style="color:#646970;">Transportør: '+esc(option.carrier_name || '—')+'</span>' +
@@ -1119,6 +1132,7 @@ class LP_Cargonizer_Connector {
 				var selected = [];
 				shippingOptionsList.querySelectorAll('.lp-shipping-option:checked').forEach(function(input){
 					selected.push({
+						key: input.getAttribute('data-method-key') || '',
 						agreement_id: input.getAttribute('data-agreement-id') || '',
 						agreement_name: input.getAttribute('data-agreement-name') || '',
 						agreement_description: input.getAttribute('data-agreement-description') || '',
@@ -1128,6 +1142,7 @@ class LP_Cargonizer_Connector {
 						product_id: input.getAttribute('data-product-id') || '',
 						product_name: input.getAttribute('data-product-name') || '',
 						is_manual: input.getAttribute('data-is-manual') === '1',
+						is_manual_norgespakke: input.getAttribute('data-is-manual-norgespakke') === '1',
 						sms_service_id: input.getAttribute('data-sms-service-id') || '',
 						sms_service_name: input.getAttribute('data-sms-service-name') || '',
 						delivery_to_pickup_point: input.getAttribute('data-delivery-to-pickup-point') === '1',
@@ -1163,8 +1178,15 @@ class LP_Cargonizer_Connector {
 				return value.length > max ? (value.slice(0, max) + '...') : value;
 			}
 
+			function isManualNorgespakkeRow(row){
+				if (!row) { return false; }
+				if (row.is_manual_norgespakke) { return true; }
+				var key = (row.agreement_id || '') + '|' + (row.product_id || '');
+				return key === 'manual|norgespakke';
+			}
+
 			function getManualNorgespakkePackages(row){
-				if (!row || row.selected_price_source !== 'manual_norgespakke') { return []; }
+				if (!isManualNorgespakkeRow(row) || row.selected_price_source !== 'manual_norgespakke') { return []; }
 				var debug = row.norgespakke_debug || {};
 				if (!Array.isArray(debug.packages)) { return []; }
 				return debug.packages;
@@ -1198,7 +1220,7 @@ class LP_Cargonizer_Connector {
 			function renderEstimateDebug(row, options){
 				if (!row) { return ''; }
 				var opts = options || {};
-				var isManualNorgespakke = row.selected_price_source === 'manual_norgespakke';
+				var isManualNorgespakke = isManualNorgespakkeRow(row) && row.selected_price_source === 'manual_norgespakke';
 				if (isManualNorgespakke) {
 					var debug = row.norgespakke_debug || {};
 					var packageRows = getManualNorgespakkePackages(row);
@@ -3563,6 +3585,7 @@ class LP_Cargonizer_Connector {
 		$method_pricing = $this->get_enabled_method_pricing();
 		foreach ($methods as $method) {
 			$method_payload = array(
+				'key' => isset($method['key']) ? sanitize_text_field($method['key']) : '',
 				'agreement_id' => isset($method['agreement_id']) ? sanitize_text_field($method['agreement_id']) : '',
 				'agreement_name' => isset($method['agreement_name']) ? sanitize_text_field($method['agreement_name']) : '',
 				'agreement_description' => isset($method['agreement_description']) ? sanitize_text_field($method['agreement_description']) : '',
@@ -3576,7 +3599,12 @@ class LP_Cargonizer_Connector {
 				'sms_service_id' => isset($method['sms_service_id']) ? sanitize_text_field($method['sms_service_id']) : '',
 				'sms_service_name' => isset($method['sms_service_name']) ? sanitize_text_field($method['sms_service_name']) : '',
 				'is_manual' => !empty($method['is_manual']),
+				'is_manual_norgespakke' => !empty($method['is_manual_norgespakke']),
 			);
+			if ($method_payload['key'] === '') {
+				$method_payload['key'] = implode('|', array($method_payload['agreement_id'], $method_payload['product_id']));
+			}
+			$method_payload['is_manual_norgespakke'] = $this->is_manual_norgespakke_method($method_payload);
 			$method_key = implode('|', array($method_payload['agreement_id'], $method_payload['product_id']));
 			if (!isset($enabled_map[$method_key])) {
 				continue;
@@ -3678,6 +3706,7 @@ class LP_Cargonizer_Connector {
 				'parsed_error_message' => '',
 				'human_error' => '',
 				'raw_response' => '',
+				'is_manual_norgespakke' => false,
 				'norgespakke_debug' => array(),
 				'optimized_partition_used' => false,
 				'optimized_shipment_count' => 0,
@@ -3703,6 +3732,7 @@ class LP_Cargonizer_Connector {
 
 
 			if ($this->is_manual_norgespakke_method($method_payload)) {
+				$item['is_manual_norgespakke'] = true;
 				$item['method_name'] = 'Posten - Norgespakke (manuell)';
 				$item['selected_price_source'] = 'manual_norgespakke';
 				$item['price_source_config'] = 'manual_norgespakke';
