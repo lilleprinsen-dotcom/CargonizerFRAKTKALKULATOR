@@ -1519,9 +1519,13 @@ class LP_Cargonizer_Connector {
 				if (!colli.isValid || !colli.payload.packages || !colli.payload.packages.length) { return; }
 				var methodData = getMethodDataByKey(methodKey);
 				if (!methodData) { return; }
+				var isDsvMethod = ((methodData.carrier_id || '') + ' ' + (methodData.carrier_name || '')).toLowerCase().indexOf('dsv') !== -1;
+				var shouldRunProgressiveDsv = isDsvMethod && colli.payload.packages.length > 1;
 				var form = new FormData();
-				form.append('action', 'lp_cargonizer_run_bulk_estimate');
-				form.append('nonce', '<?php echo esc_js(wp_create_nonce(self::NONCE_ACTION_ESTIMATE)); ?>');
+				form.append('action', shouldRunProgressiveDsv ? 'lp_cargonizer_run_bulk_estimate_baseline' : 'lp_cargonizer_run_bulk_estimate');
+				form.append('nonce', shouldRunProgressiveDsv
+					? '<?php echo esc_js(wp_create_nonce(self::NONCE_ACTION_ESTIMATE_BASELINE)); ?>'
+					: '<?php echo esc_js(wp_create_nonce(self::NONCE_ACTION_ESTIMATE)); ?>');
 				form.append('order_id', currentOrderId);
 				colli.payload.packages.forEach(function(pkg, idx){
 					Object.keys(pkg).forEach(function(key){ form.append('packages['+idx+']['+key+']', pkg[key]); });
@@ -1529,9 +1533,13 @@ class LP_Cargonizer_Connector {
 				Object.keys(methodData).forEach(function(key){ form.append('methods[0]['+key+']', methodData[key]); });
 				if (selectedServicepartner) {
 					form.append('methods[0][servicepartner]', selectedServicepartner);
+					methodData.servicepartner = selectedServicepartner;
 				}
 				if (useSmsService) {
 					form.append('methods[0][use_sms_service]', '1');
+					methodData.use_sms_service = true;
+				} else {
+					methodData.use_sms_service = false;
 				}
 				fetch(ajaxurl, { method:'POST', credentials:'same-origin', body: form })
 					.then(function(res){ return res.json(); })
@@ -1542,6 +1550,9 @@ class LP_Cargonizer_Connector {
 						var row = res.data.results[0];
 						mergeResultByMethod(row);
 						renderEstimateResults(latestEstimateResults);
+						if (shouldRunProgressiveDsv && row && row.optimization_state === 'pending') {
+							optimizeDsvMethod(methodData, colli.payload.packages);
+						}
 					});
 			}
 
@@ -1774,6 +1785,8 @@ class LP_Cargonizer_Connector {
 							if (methodKeyForRow(row) === methodKey) {
 								row.optimization_state = 'failed';
 								row.optimization_debug = row.optimization_debug || {};
+								row.optimization_debug.enabled = false;
+								row.optimization_debug.optimization_changed_result = false;
 								row.optimization_debug.reason = 'Optimalisering feilet, beholdt baseline-resultat.';
 							}
 							return row;
@@ -3495,8 +3508,10 @@ class LP_Cargonizer_Connector {
 			wp_send_json_error(array('message' => 'Ingen tilgang.'), 403);
 		}
 
+		$is_baseline_flow = !empty($_POST['baseline_flow']);
 		$nonce = isset($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : '';
-		if (!wp_verify_nonce($nonce, self::NONCE_ACTION_ESTIMATE) && !wp_verify_nonce($nonce, self::NONCE_ACTION_ESTIMATE_BASELINE)) {
+		$expected_nonce_action = $is_baseline_flow ? self::NONCE_ACTION_ESTIMATE_BASELINE : self::NONCE_ACTION_ESTIMATE;
+		if (!wp_verify_nonce($nonce, $expected_nonce_action)) {
 			wp_send_json_error(array('message' => 'Ugyldig nonce.'), 403);
 		}
 
@@ -3732,7 +3747,7 @@ class LP_Cargonizer_Connector {
 			}
 
 
-			if ($this->is_dsv_method($method_payload) && count($clean_packages) > 1) {
+			if ($this->is_dsv_method($method_payload) && count($clean_packages) > 1 && $is_baseline_flow) {
 				$baseline_estimate = $this->run_consignment_estimate_for_packages($clean_packages, $recipient, $method_payload, $pricing_config);
 				$item = $this->apply_estimate_result_to_item($item, $baseline_estimate, $method_payload, $recipient);
 				$item['optimization_debug'] = array(
@@ -3750,6 +3765,38 @@ class LP_Cargonizer_Connector {
 					'variants' => array($this->build_dsv_baseline_variant($baseline_estimate, $clean_packages)),
 				);
 				$item['optimization_state'] = 'pending';
+				$results[] = $item;
+				continue;
+			}
+
+			if ($this->is_dsv_method($method_payload) && count($clean_packages) > 1) {
+				$baseline_estimate = $this->run_consignment_estimate_for_packages($clean_packages, $recipient, $method_payload, $pricing_config);
+				$item = $this->apply_estimate_result_to_item($item, $baseline_estimate, $method_payload, $recipient);
+				$dsv_optimization = $this->optimize_dsv_partition_estimates($clean_packages, $recipient, $method_payload, $pricing_config, $baseline_estimate);
+				$item['optimization_debug'] = isset($dsv_optimization['debug']) ? $dsv_optimization['debug'] : array();
+				$item['optimization_state'] = 'done';
+				$winner = isset($dsv_optimization['winner']) && is_array($dsv_optimization['winner']) ? $dsv_optimization['winner'] : array();
+
+				if (!empty($winner) && isset($winner['status']) && $winner['status'] === 'ok' && !empty($dsv_optimization['used'])) {
+					$item['optimized_partition_used'] = true;
+					$item['optimized_shipment_count'] = isset($winner['shipment_count']) ? (int) $winner['shipment_count'] : 0;
+					$item['optimized_shipments'] = isset($winner['groups']) ? $winner['groups'] : array();
+					$item['status'] = 'ok';
+					$item['selected_price_source'] = 'optimized_partition';
+					$item['selected_price_value'] = $winner['total_final_price_ex_vat'];
+					$item['estimated_price'] = $winner['total_final_price_ex_vat'];
+					$item['original_price'] = $winner['total_final_price_ex_vat'];
+					$item['original_list_price'] = $winner['total_final_price_ex_vat'];
+					$item['price_source_priority'] = array('optimized_partition');
+					$item['actual_fallback_priority'] = array('optimized_partition');
+					$item['configured_price_source_key'] = 'optimized_partition';
+					$item['fallback_step_used'] = 1;
+					$item['subtotal_ex_vat'] = $winner['total_final_price_ex_vat'];
+					$item['final_price_ex_vat'] = $winner['total_final_price_ex_vat'];
+					$item['rounded_price'] = $winner['total_rounded_price'];
+					$item['price_incl_vat'] = $winner['total_rounded_price'];
+				}
+
 				$results[] = $item;
 				continue;
 			}
@@ -3891,6 +3938,7 @@ class LP_Cargonizer_Connector {
 
 
 	public function ajax_run_bulk_estimate_baseline() {
+		$_POST['baseline_flow'] = 1;
 		$this->ajax_run_bulk_estimate();
 	}
 
@@ -3974,6 +4022,9 @@ class LP_Cargonizer_Connector {
 			}
 
 			$pricing_config = isset($method_pricing[$method_key]) && is_array($method_pricing[$method_key]) ? $method_pricing[$method_key] : $this->get_default_method_pricing();
+			$discount_percent = isset($pricing_config['discount_percent']) ? $this->sanitize_discount_percent($pricing_config['discount_percent']) : 0;
+			$fuel_percent = isset($pricing_config['fuel_surcharge']) ? $this->sanitize_non_negative_number($pricing_config['fuel_surcharge']) : 0;
+			$toll_surcharge = isset($pricing_config['toll_surcharge']) ? $this->sanitize_non_negative_number($pricing_config['toll_surcharge']) : 0;
 			$bring_manual_handling = $this->get_bring_manual_handling_fee($clean_packages, $method_payload);
 			$manual_handling_fee = isset($pricing_config['handling_fee']) ? $this->sanitize_non_negative_number($pricing_config['handling_fee']) : 0;
 			$bring_manual_handling_fee = isset($bring_manual_handling['fee']) ? $this->sanitize_non_negative_number($bring_manual_handling['fee']) : 0;
@@ -4002,11 +4053,81 @@ class LP_Cargonizer_Connector {
 				'use_sms_service' => $method_payload['use_sms_service'],
 				'sms_service_id' => $method_payload['sms_service_id'],
 				'sms_service_name' => $method_payload['sms_service_name'],
+				'requires_sms_service' => false,
+				'sms_service_missing' => false,
+				'sms_service_error' => '',
+				'requires_servicepartner' => false,
+				'servicepartner_options' => array(),
+				'servicepartner_fetch' => array(),
+				'estimated_price' => '',
+				'estimated_cost' => '',
+				'gross_amount' => '',
+				'net_amount' => '',
+				'fallback_price' => '',
+				'selected_price_source' => '',
+				'selected_price_value' => '',
+				'price_source_fallback_used' => false,
+				'price_source_fallback_reason' => '',
+				'price_source_priority' => array(),
+				'actual_fallback_priority' => array(),
+				'fallback_step_used' => 0,
+				'original_price' => '',
+				'original_list_price' => '',
+				'extracted_handling_fee' => '',
+				'extracted_toll_surcharge' => '',
+				'extracted_fuel_percent' => '',
+				'extracted_base_freight' => '',
+				'discounted_base_freight' => '',
+				'recalculated_fuel_surcharge' => '',
+				'discount_percent' => $discount_percent,
+				'discounted_base' => '',
+				'fuel_surcharge' => number_format($fuel_percent, 2, '.', ''),
+				'toll_surcharge' => number_format($toll_surcharge, 2, '.', ''),
+				'handling_fee' => number_format($pricing_config['handling_fee'], 2, '.', ''),
+				'price_source_config' => isset($pricing_config['price_source']) ? $pricing_config['price_source'] : 'estimated',
+				'configured_price_source_key' => '',
+				'vat_percent' => isset($pricing_config['vat_percent']) ? $pricing_config['vat_percent'] : 0,
+				'rounding_mode' => isset($pricing_config['rounding_mode']) ? $pricing_config['rounding_mode'] : 'none',
+				'manual_handling_fee' => number_format($manual_handling_fee, 2, '.', ''),
+				'bring_manual_handling_fee' => number_format($bring_manual_handling_fee, 2, '.', ''),
+				'total_handling_fee' => number_format($pricing_config['handling_fee'], 2, '.', ''),
+				'bring_manual_handling_triggered' => $bring_manual_handling_triggered,
+				'bring_manual_handling_package_count' => isset($bring_manual_handling['package_count']) ? (int) $bring_manual_handling['package_count'] : 0,
+				'base_price' => '',
+				'subtotal_ex_vat' => '',
+				'price_incl_vat' => '',
+				'rounded_price' => '',
+				'final_price_ex_vat' => '',
+				'status' => 'failed',
+				'http_status' => 0,
+				'error' => '',
+				'error_code' => '',
+				'error_type' => '',
+				'error_details' => '',
+				'parsed_error_message' => '',
+				'human_error' => '',
+				'raw_response' => '',
+				'norgespakke_debug' => array(),
 				'optimized_partition_used' => false,
 				'optimized_shipment_count' => 0,
 				'optimized_shipments' => array(),
 				'optimization_debug' => array(),
 				'optimization_state' => 'done',
+				'request_summary' => array(
+					'agreement_id' => $method_payload['agreement_id'],
+					'product_id' => $method_payload['product_id'],
+					'carrier_id' => $method_payload['carrier_id'],
+					'carrier_name' => $method_payload['carrier_name'],
+					'product_name' => $method_payload['product_name'],
+					'country' => isset($recipient['country']) ? $recipient['country'] : '',
+					'postcode' => isset($recipient['postcode']) ? $recipient['postcode'] : '',
+					'number_of_packages' => count($clean_packages),
+					'delivery_to_pickup_point' => !empty($pricing_config['delivery_to_pickup_point']),
+					'delivery_to_home' => !empty($pricing_config['delivery_to_home']),
+					'packages' => $clean_packages,
+					'selected_servicepartner' => $method_payload['servicepartner'],
+					'use_sms_service' => $method_payload['use_sms_service'],
+				),
 			);
 
 			$baseline_estimate = $this->run_consignment_estimate_for_packages($clean_packages, $recipient, $method_payload, $pricing_config);
@@ -4038,10 +4159,23 @@ class LP_Cargonizer_Connector {
 				}
 			} elseif ($baseline_estimate['status'] !== 'ok') {
 				$item['status'] = 'failed';
+				$item['optimization_state'] = 'failed';
+				$item['optimization_debug']['enabled'] = false;
+				$item['optimization_debug']['optimization_changed_result'] = false;
+				$item['optimization_debug']['reason'] = isset($item['optimization_debug']['reason']) && $item['optimization_debug']['reason'] !== ''
+					? $item['optimization_debug']['reason']
+					: 'Optimalisering feilet og baseline-estimatet var ikke gyldig.';
 				if ($item['error'] === '') {
 					$item['error'] = isset($item['optimization_debug']['reason']) ? $item['optimization_debug']['reason'] : 'DSV-optimalisering feilet.';
 					$item['parsed_error_message'] = $item['error'];
 				}
+			} else {
+				$item['optimization_state'] = 'failed';
+				$item['optimization_debug']['enabled'] = false;
+				$item['optimization_debug']['optimization_changed_result'] = false;
+				$item['optimization_debug']['reason'] = isset($item['optimization_debug']['reason']) && $item['optimization_debug']['reason'] !== ''
+					? $item['optimization_debug']['reason']
+					: 'Optimalisering feilet, beholdt baseline-resultat.';
 			}
 
 			$results[] = $item;
