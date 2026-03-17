@@ -18,6 +18,8 @@ class LP_Cargonizer_Connector {
 	const NONCE_ACTION_ORDER_DATA = 'lp_cargonizer_get_order_data';
 	const NONCE_ACTION_FETCH_OPTIONS = 'lp_cargonizer_fetch_shipping_options';
 	const NONCE_ACTION_ESTIMATE = 'lp_cargonizer_run_bulk_estimate';
+	const NONCE_ACTION_ESTIMATE_BASELINE = 'lp_cargonizer_run_bulk_estimate_baseline';
+	const NONCE_ACTION_OPTIMIZE_DSV = 'lp_cargonizer_optimize_dsv_estimates';
 	const NONCE_ACTION_SERVICEPARTNERS = 'lp_cargonizer_fetch_servicepartners';
 
 	public function __construct() {
@@ -28,6 +30,8 @@ class LP_Cargonizer_Connector {
 		add_action('wp_ajax_lp_cargonizer_get_order_estimate_data', array($this, 'ajax_get_order_estimate_data'));
 		add_action('wp_ajax_lp_cargonizer_get_shipping_options', array($this, 'ajax_get_shipping_options'));
 		add_action('wp_ajax_lp_cargonizer_run_bulk_estimate', array($this, 'ajax_run_bulk_estimate'));
+		add_action('wp_ajax_lp_cargonizer_run_bulk_estimate_baseline', array($this, 'ajax_run_bulk_estimate_baseline'));
+		add_action('wp_ajax_lp_cargonizer_optimize_dsv_estimates', array($this, 'ajax_optimize_dsv_estimates'));
 		add_action('wp_ajax_lp_cargonizer_get_servicepartner_options', array($this, 'ajax_get_servicepartner_options'));
 	}
 
@@ -1306,6 +1310,14 @@ class LP_Cargonizer_Connector {
 				];
 				var optimization = row.optimization_debug || null;
 				var optimizationHtml = '';
+				var optimizationStateText = '';
+				if (row.optimization_state === 'pending') {
+					optimizationStateText = 'Baseline vist. Optimaliserer kombinasjoner...';
+				} else if (row.optimization_state === 'done') {
+					optimizationStateText = (optimization && optimization.optimization_changed_result) ? 'Optimalisering fant bedre løsning' : 'Optimalisering fant ikke bedre løsning';
+				} else if (row.optimization_state === 'failed') {
+					optimizationStateText = 'Optimalisering feilet, baseline beholdt';
+				}
 				if (optimization && (optimization.enabled || optimization.reason || Array.isArray(optimization.variants))) {
 					var variants = Array.isArray(optimization.variants) ? optimization.variants : [];
 					var variantRows = variants.map(function(variant){
@@ -1319,6 +1331,7 @@ class LP_Cargonizer_Connector {
 					var changedText = optimization.optimization_changed_result ? 'ja' : 'nei';
 					optimizationHtml = '<div style="margin-top:8px;padding:8px;border:1px solid #dcdcde;background:#f6f7f7;">'
 						+ '<strong>DSV-optimalisering</strong>: '
+						+ (optimizationStateText ? '<div style="margin-top:4px;font-weight:600;">' + esc(optimizationStateText) + '</div>' : '')
 						+ 'enabled=' + esc(optimization.enabled ? 'ja' : 'nei')
 						+ ', baseline_attempted=' + esc(optimization.baseline_estimate_attempted ? 'ja' : 'nei')
 						+ ', baseline_status=' + esc(optimization.baseline_estimate_status || '—')
@@ -1626,9 +1639,17 @@ class LP_Cargonizer_Connector {
 					var multiShipmentInfo = (row.optimized_partition_used && (row.optimized_shipment_count || 0) > 1)
 						? '<div style="margin-top:6px;color:#8a4b00;font-weight:600;">Optimalisert som ' + esc(row.optimized_shipment_count) + ' separate delsendelser (må bookes separat).</div>'
 						: '';
+					var optimizationInfo = '';
+					if (row.optimization_state === 'pending') {
+						optimizationInfo = '<div style="margin-top:6px;color:#125228;font-weight:600;">Baseline vist. Optimaliserer kombinasjoner...</div>';
+					} else if (row.optimization_state === 'done') {
+						optimizationInfo = '<div style="margin-top:6px;color:#125228;font-weight:600;">' + esc((row.optimization_debug && row.optimization_debug.optimization_changed_result) ? 'Optimalisering fant bedre løsning' : 'Optimalisering fant ikke bedre løsning') + '</div>';
+					} else if (row.optimization_state === 'failed') {
+						optimizationInfo = '<div style="margin-top:6px;color:#b32d2e;font-weight:600;">Optimalisering feilet, baseline beholdt.</div>';
+					}
 					var detailsHtml = '<details><summary>Vis beregning</summary>' + renderEstimateDebug(row, { asDetails: false }) + '</details>';
 					return '<tr>' +
-					'<td>'+esc(row.method_name || row.product_id || 'Ukjent metode') + packageSummaryHtml + multiShipmentInfo + '</td>' +
+					'<td>'+esc(row.method_name || row.product_id || 'Ukjent metode') + packageSummaryHtml + multiShipmentInfo + optimizationInfo + '</td>' +
 					'<td>'+esc(formatDeliveryMode(row))+'</td>' +
 					'<td>'+esc(listPriceText)+'</td>' +
 					'<td>'+esc(discountPercentText)+'</td>' +
@@ -1717,6 +1738,50 @@ class LP_Cargonizer_Connector {
 				return { packages: colli.payload.packages, methods: methods };
 			}
 
+			function appendEstimatePayload(form, packages, methods){
+				form.append('order_id', currentOrderId);
+				packages.forEach(function(pkg, idx){
+					Object.keys(pkg).forEach(function(key){
+						form.append('packages['+idx+']['+key+']', pkg[key]);
+					});
+				});
+				methods.forEach(function(method, idx){
+					Object.keys(method).forEach(function(key){
+						form.append('methods['+idx+']['+key+']', method[key]);
+					});
+				});
+			}
+
+			function optimizeDsvMethod(method, packages){
+				var form = new FormData();
+				form.append('action', 'lp_cargonizer_optimize_dsv_estimates');
+				form.append('nonce', '<?php echo esc_js(wp_create_nonce(self::NONCE_ACTION_OPTIMIZE_DSV)); ?>');
+				appendEstimatePayload(form, packages, [method]);
+				return fetch(ajaxurl, { method:'POST', credentials:'same-origin', body: form })
+					.then(function(res){ return res.json(); })
+					.then(function(res){
+						if (!res || !res.success || !res.data || !Array.isArray(res.data.results) || !res.data.results.length) {
+							throw new Error('optimize_failed');
+						}
+						var updatedRow = res.data.results[0];
+						updatedRow.optimization_state = 'done';
+						mergeResultByMethod(updatedRow);
+						renderEstimateResults(latestEstimateResults);
+					})
+					.catch(function(){
+						var methodKey = (method.agreement_id || '') + '|' + (method.product_id || '');
+						latestEstimateResults = latestEstimateResults.map(function(row){
+							if (methodKeyForRow(row) === methodKey) {
+								row.optimization_state = 'failed';
+								row.optimization_debug = row.optimization_debug || {};
+								row.optimization_debug.reason = 'Optimalisering feilet, beholdt baseline-resultat.';
+							}
+							return row;
+						});
+						renderEstimateResults(latestEstimateResults);
+					});
+			}
+
 			function runEstimate(){
 				var validData = validateBeforeEstimate();
 				if (!validData) { return; }
@@ -1725,19 +1790,9 @@ class LP_Cargonizer_Connector {
 				resultsContent.innerHTML = '<em>Henter estimater...</em>';
 
 				var form = new FormData();
-				form.append('action', 'lp_cargonizer_run_bulk_estimate');
-				form.append('nonce', '<?php echo esc_js(wp_create_nonce(self::NONCE_ACTION_ESTIMATE)); ?>');
-				form.append('order_id', currentOrderId);
-				validData.packages.forEach(function(pkg, idx){
-					Object.keys(pkg).forEach(function(key){
-						form.append('packages['+idx+']['+key+']', pkg[key]);
-					});
-				});
-				validData.methods.forEach(function(method, idx){
-					Object.keys(method).forEach(function(key){
-						form.append('methods['+idx+']['+key+']', method[key]);
-					});
-				});
+				form.append('action', 'lp_cargonizer_run_bulk_estimate_baseline');
+				form.append('nonce', '<?php echo esc_js(wp_create_nonce(self::NONCE_ACTION_ESTIMATE_BASELINE)); ?>');
+				appendEstimatePayload(form, validData.packages, validData.methods);
 
 				fetch(ajaxurl, { method:'POST', credentials:'same-origin', body: form })
 					.then(function(res){ return res.json(); })
@@ -1746,7 +1801,18 @@ class LP_Cargonizer_Connector {
 							resultsContent.innerHTML = '<span style="color:#b32d2e;">Estimering feilet.</span>';
 							return;
 						}
-						renderEstimateResults(res.data.results || []);
+						latestEstimateResults = (res.data.results || []).slice();
+						renderEstimateResults(latestEstimateResults);
+
+						validData.methods.forEach(function(method){
+							var methodKey = (method.agreement_id || '') + '|' + (method.product_id || '');
+							for (var i = 0; i < latestEstimateResults.length; i++) {
+								if (methodKeyForRow(latestEstimateResults[i]) === methodKey && latestEstimateResults[i].optimization_state === 'pending') {
+									optimizeDsvMethod(method, validData.packages);
+									break;
+								}
+							}
+						});
 					})
 					.catch(function(){
 						resultsContent.innerHTML = '<span style="color:#b32d2e;">Teknisk feil ved estimering.</span>';
@@ -1756,7 +1822,6 @@ class LP_Cargonizer_Connector {
 						runEstimateBtn.textContent = 'Estimer fraktpris';
 					});
 			}
-
 			function openModal(){ modal.style.display = 'block'; }
 			function closeModal(){ modal.style.display = 'none'; }
 
@@ -3431,7 +3496,7 @@ class LP_Cargonizer_Connector {
 		}
 
 		$nonce = isset($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : '';
-		if (!wp_verify_nonce($nonce, self::NONCE_ACTION_ESTIMATE)) {
+		if (!wp_verify_nonce($nonce, self::NONCE_ACTION_ESTIMATE) && !wp_verify_nonce($nonce, self::NONCE_ACTION_ESTIMATE_BASELINE)) {
 			wp_send_json_error(array('message' => 'Ugyldig nonce.'), 403);
 		}
 
@@ -3603,6 +3668,7 @@ class LP_Cargonizer_Connector {
 				'optimized_shipment_count' => 0,
 				'optimized_shipments' => array(),
 				'optimization_debug' => array(),
+				'optimization_state' => '',
 				'request_summary' => array(
 					'agreement_id' => $method_payload['agreement_id'],
 					'product_id' => $method_payload['product_id'],
@@ -3669,38 +3735,21 @@ class LP_Cargonizer_Connector {
 			if ($this->is_dsv_method($method_payload) && count($clean_packages) > 1) {
 				$baseline_estimate = $this->run_consignment_estimate_for_packages($clean_packages, $recipient, $method_payload, $pricing_config);
 				$item = $this->apply_estimate_result_to_item($item, $baseline_estimate, $method_payload, $recipient);
-				$dsv_optimization = $this->optimize_dsv_partition_estimates($clean_packages, $recipient, $method_payload, $pricing_config, $baseline_estimate);
-				$item['optimization_debug'] = $dsv_optimization['debug'];
-
-				$winner = isset($dsv_optimization['winner']) && is_array($dsv_optimization['winner']) ? $dsv_optimization['winner'] : array();
-				if (!empty($winner) && isset($winner['status']) && $winner['status'] === 'ok') {
-					if (!empty($dsv_optimization['used'])) {
-						$item['optimized_partition_used'] = true;
-						$item['optimized_shipment_count'] = isset($winner['shipment_count']) ? (int) $winner['shipment_count'] : 0;
-						$item['optimized_shipments'] = isset($winner['groups']) ? $winner['groups'] : array();
-						$item['status'] = 'ok';
-						$item['selected_price_source'] = 'optimized_partition';
-						$item['selected_price_value'] = $winner['total_final_price_ex_vat'];
-						$item['estimated_price'] = $winner['total_final_price_ex_vat'];
-						$item['original_price'] = $winner['total_final_price_ex_vat'];
-						$item['original_list_price'] = $winner['total_final_price_ex_vat'];
-						$item['price_source_priority'] = array('optimized_partition');
-						$item['actual_fallback_priority'] = array('optimized_partition');
-						$item['configured_price_source_key'] = 'optimized_partition';
-						$item['fallback_step_used'] = 1;
-						$item['subtotal_ex_vat'] = $winner['total_final_price_ex_vat'];
-						$item['final_price_ex_vat'] = $winner['total_final_price_ex_vat'];
-						$item['rounded_price'] = $winner['total_rounded_price'];
-						$item['price_incl_vat'] = $winner['total_rounded_price'];
-					}
-				} else {
-					$item['status'] = 'failed';
-					if ($item['error'] === '') {
-						$item['error'] = isset($dsv_optimization['debug']['reason']) ? $dsv_optimization['debug']['reason'] : 'DSV-optimalisering feilet.';
-						$item['parsed_error_message'] = $item['error'];
-					}
-				}
-
+				$item['optimization_debug'] = array(
+					'enabled' => false,
+					'reason' => 'DSV-optimalisering ikke kjørt ennå',
+					'package_count' => count($clean_packages),
+					'baseline_estimate_attempted' => true,
+					'baseline_estimate_status' => isset($baseline_estimate['status']) ? $baseline_estimate['status'] : 'failed',
+					'partitions_tested' => 0,
+					'winner_partition_index' => -1,
+					'winner_total_final_price_ex_vat' => '',
+					'winner_total_rounded_price' => '',
+					'winner_shipment_count' => 0,
+					'optimization_changed_result' => false,
+					'variants' => array($this->build_dsv_baseline_variant($baseline_estimate, $clean_packages)),
+				);
+				$item['optimization_state'] = 'pending';
 				$results[] = $item;
 				continue;
 			}
@@ -3835,6 +3884,167 @@ class LP_Cargonizer_Connector {
 
 		if (!$has_allowed_methods) {
 			wp_send_json_error(array('message' => 'Ingen av de valgte fraktmetodene er aktivert i Cargonizer-innstillingene.'), 400);
+		}
+
+		wp_send_json_success(array('results' => $results));
+	}
+
+
+	public function ajax_run_bulk_estimate_baseline() {
+		$this->ajax_run_bulk_estimate();
+	}
+
+	public function ajax_optimize_dsv_estimates() {
+		if (!current_user_can('manage_woocommerce')) {
+			wp_send_json_error(array('message' => 'Ingen tilgang.'), 403);
+		}
+
+		$nonce = isset($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : '';
+		if (!wp_verify_nonce($nonce, self::NONCE_ACTION_OPTIMIZE_DSV)) {
+			wp_send_json_error(array('message' => 'Ugyldig nonce.'), 403);
+		}
+
+		$order_id = isset($_POST['order_id']) ? absint($_POST['order_id']) : 0;
+		$order = $order_id ? wc_get_order($order_id) : false;
+		if (!$order) {
+			wp_send_json_error(array('message' => 'Ordre ikke funnet.'), 404);
+		}
+
+		$packages = isset($_POST['packages']) && is_array($_POST['packages']) ? wp_unslash($_POST['packages']) : array();
+		$methods = isset($_POST['methods']) && is_array($_POST['methods']) ? wp_unslash($_POST['methods']) : array();
+		$enabled_map = $this->get_enabled_method_map();
+		$method_pricing = $this->get_enabled_method_pricing();
+
+		if (empty($enabled_map)) {
+			wp_send_json_error(array('message' => 'Ingen fraktmetoder er aktivert i Cargonizer-innstillingene.'), 400);
+		}
+		if (empty($packages) || empty($methods)) {
+			wp_send_json_error(array('message' => 'Mangler kolli eller fraktvalg.'), 400);
+		}
+
+		$clean_packages = array();
+		foreach ($packages as $package) {
+			$clean_packages[] = array(
+				'name' => isset($package['name']) ? sanitize_text_field($package['name']) : '',
+				'description' => isset($package['description']) ? sanitize_text_field($package['description']) : '',
+				'weight' => isset($package['weight']) ? (float) $package['weight'] : 0,
+				'length' => isset($package['length']) ? (float) $package['length'] : 0,
+				'width' => isset($package['width']) ? (float) $package['width'] : 0,
+				'height' => isset($package['height']) ? (float) $package['height'] : 0,
+			);
+		}
+
+		$recipient = array(
+			'name' => trim($order->get_shipping_first_name() . ' ' . $order->get_shipping_last_name()),
+			'address_1' => $order->get_shipping_address_1(),
+			'address_2' => $order->get_shipping_address_2(),
+			'postcode' => $order->get_shipping_postcode(),
+			'city' => $order->get_shipping_city(),
+			'country' => $order->get_shipping_country(),
+		);
+		if ($recipient['name'] === '') {
+			$recipient['name'] = trim($order->get_billing_first_name() . ' ' . $order->get_billing_last_name());
+		}
+
+		$results = array();
+		foreach ($methods as $method) {
+			$method_payload = array(
+				'agreement_id' => isset($method['agreement_id']) ? sanitize_text_field($method['agreement_id']) : '',
+				'agreement_name' => isset($method['agreement_name']) ? sanitize_text_field($method['agreement_name']) : '',
+				'agreement_description' => isset($method['agreement_description']) ? sanitize_text_field($method['agreement_description']) : '',
+				'agreement_number' => isset($method['agreement_number']) ? sanitize_text_field($method['agreement_number']) : '',
+				'carrier_id' => isset($method['carrier_id']) ? sanitize_text_field($method['carrier_id']) : '',
+				'carrier_name' => isset($method['carrier_name']) ? sanitize_text_field($method['carrier_name']) : '',
+				'product_id' => isset($method['product_id']) ? sanitize_text_field($method['product_id']) : '',
+				'product_name' => isset($method['product_name']) ? sanitize_text_field($method['product_name']) : '',
+				'servicepartner' => isset($method['servicepartner']) ? sanitize_text_field($method['servicepartner']) : '',
+				'use_sms_service' => !empty($method['use_sms_service']),
+				'sms_service_id' => isset($method['sms_service_id']) ? sanitize_text_field($method['sms_service_id']) : '',
+				'sms_service_name' => isset($method['sms_service_name']) ? sanitize_text_field($method['sms_service_name']) : '',
+				'is_manual' => !empty($method['is_manual']),
+			);
+			$method_key = implode('|', array($method_payload['agreement_id'], $method_payload['product_id']));
+			if (!isset($enabled_map[$method_key]) || !$this->is_dsv_method($method_payload) || count($clean_packages) <= 1) {
+				continue;
+			}
+			if ($method_payload['sms_service_id'] === '') {
+				$sms_service = $this->find_sms_service_for_method($method);
+				$method_payload['sms_service_id'] = $sms_service['service_id'];
+				$method_payload['sms_service_name'] = $sms_service['service_name'];
+			}
+
+			$pricing_config = isset($method_pricing[$method_key]) && is_array($method_pricing[$method_key]) ? $method_pricing[$method_key] : $this->get_default_method_pricing();
+			$bring_manual_handling = $this->get_bring_manual_handling_fee($clean_packages, $method_payload);
+			$manual_handling_fee = isset($pricing_config['handling_fee']) ? $this->sanitize_non_negative_number($pricing_config['handling_fee']) : 0;
+			$bring_manual_handling_fee = isset($bring_manual_handling['fee']) ? $this->sanitize_non_negative_number($bring_manual_handling['fee']) : 0;
+			$bring_manual_handling_triggered = !empty($bring_manual_handling['triggered']);
+			if (!$bring_manual_handling_triggered) {
+				$bring_manual_handling_fee = 0;
+			}
+			$pricing_config['manual_handling_fee'] = $manual_handling_fee;
+			$pricing_config['bring_manual_handling_fee'] = $bring_manual_handling_fee;
+			$pricing_config['bring_manual_handling_triggered'] = $bring_manual_handling_triggered;
+			$pricing_config['bring_manual_handling_package_count'] = isset($bring_manual_handling['package_count']) ? (int) $bring_manual_handling['package_count'] : 0;
+			$pricing_config['handling_fee'] = round($manual_handling_fee + $bring_manual_handling_fee, 2);
+
+			$item = array(
+				'method_name' => $this->format_method_label($method_payload['agreement_name'], $method_payload['product_name'], $method_payload['carrier_name']),
+				'agreement_id' => $method_payload['agreement_id'],
+				'agreement_name' => $method_payload['agreement_name'],
+				'agreement_description' => $method_payload['agreement_description'],
+				'agreement_number' => $method_payload['agreement_number'],
+				'carrier_id' => $method_payload['carrier_id'],
+				'carrier_name' => $method_payload['carrier_name'],
+				'product_id' => $method_payload['product_id'],
+				'delivery_to_pickup_point' => !empty($pricing_config['delivery_to_pickup_point']),
+				'delivery_to_home' => !empty($pricing_config['delivery_to_home']),
+				'selected_servicepartner' => $method_payload['servicepartner'],
+				'use_sms_service' => $method_payload['use_sms_service'],
+				'sms_service_id' => $method_payload['sms_service_id'],
+				'sms_service_name' => $method_payload['sms_service_name'],
+				'optimized_partition_used' => false,
+				'optimized_shipment_count' => 0,
+				'optimized_shipments' => array(),
+				'optimization_debug' => array(),
+				'optimization_state' => 'done',
+			);
+
+			$baseline_estimate = $this->run_consignment_estimate_for_packages($clean_packages, $recipient, $method_payload, $pricing_config);
+			$item = $this->apply_estimate_result_to_item($item, $baseline_estimate, $method_payload, $recipient);
+
+			$dsv_optimization = $this->optimize_dsv_partition_estimates($clean_packages, $recipient, $method_payload, $pricing_config, $baseline_estimate);
+			$item['optimization_debug'] = isset($dsv_optimization['debug']) ? $dsv_optimization['debug'] : array();
+			$winner = isset($dsv_optimization['winner']) && is_array($dsv_optimization['winner']) ? $dsv_optimization['winner'] : array();
+
+			if (!empty($winner) && isset($winner['status']) && $winner['status'] === 'ok') {
+				if (!empty($dsv_optimization['used'])) {
+					$item['optimized_partition_used'] = true;
+					$item['optimized_shipment_count'] = isset($winner['shipment_count']) ? (int) $winner['shipment_count'] : 0;
+					$item['optimized_shipments'] = isset($winner['groups']) ? $winner['groups'] : array();
+					$item['status'] = 'ok';
+					$item['selected_price_source'] = 'optimized_partition';
+					$item['selected_price_value'] = $winner['total_final_price_ex_vat'];
+					$item['estimated_price'] = $winner['total_final_price_ex_vat'];
+					$item['original_price'] = $winner['total_final_price_ex_vat'];
+					$item['original_list_price'] = $winner['total_final_price_ex_vat'];
+					$item['price_source_priority'] = array('optimized_partition');
+					$item['actual_fallback_priority'] = array('optimized_partition');
+					$item['configured_price_source_key'] = 'optimized_partition';
+					$item['fallback_step_used'] = 1;
+					$item['subtotal_ex_vat'] = $winner['total_final_price_ex_vat'];
+					$item['final_price_ex_vat'] = $winner['total_final_price_ex_vat'];
+					$item['rounded_price'] = $winner['total_rounded_price'];
+					$item['price_incl_vat'] = $winner['total_rounded_price'];
+				}
+			} elseif ($baseline_estimate['status'] !== 'ok') {
+				$item['status'] = 'failed';
+				if ($item['error'] === '') {
+					$item['error'] = isset($item['optimization_debug']['reason']) ? $item['optimization_debug']['reason'] : 'DSV-optimalisering feilet.';
+					$item['parsed_error_message'] = $item['error'];
+				}
+			}
+
+			$results[] = $item;
 		}
 
 		wp_send_json_success(array('results' => $results));
