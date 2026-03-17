@@ -172,6 +172,7 @@ class LP_Cargonizer_Connector {
 				'fuel_surcharge' => $fuel_percent,
 				'toll_surcharge' => $toll_surcharge,
 				'handling_fee' => $handling_fee,
+				'disable_optimization' => $this->sanitize_checkbox_value(isset($pricing['disable_optimization']) ? $pricing['disable_optimization'] : 0),
 				'manual_norgespakke_include_handling' => $this->sanitize_checkbox_value(isset($pricing['manual_norgespakke_include_handling']) ? $pricing['manual_norgespakke_include_handling'] : 1),
 				'price_source' => $this->sanitize_price_source(isset($pricing['price_source']) ? $pricing['price_source'] : 'estimated'),
 				'vat_percent' => $this->sanitize_non_negative_number(isset($pricing['vat_percent']) ? $pricing['vat_percent'] : 0),
@@ -188,6 +189,7 @@ class LP_Cargonizer_Connector {
 					'fuel_surcharge' => 0,
 					'toll_surcharge' => 0,
 					'handling_fee' => 0,
+					'disable_optimization' => 0,
 					'manual_norgespakke_include_handling' => 1,
 					'price_source' => 'estimated',
 					'vat_percent' => 0,
@@ -558,6 +560,7 @@ class LP_Cargonizer_Connector {
 			'fuel_surcharge' => 0,
 			'toll_surcharge' => 0,
 			'handling_fee' => 0,
+			'disable_optimization' => 0,
 			'manual_norgespakke_include_handling' => 1,
 			'price_source' => 'estimated',
 			'vat_percent' => 0,
@@ -596,6 +599,7 @@ class LP_Cargonizer_Connector {
 				'fuel_surcharge' => round($fuel_percent, 2),
 				'toll_surcharge' => round($toll_surcharge, 2),
 				'handling_fee' => round($handling_fee, 2),
+				'disable_optimization' => isset($raw['disable_optimization']) ? $this->sanitize_checkbox_value($raw['disable_optimization']) : $default['disable_optimization'],
 				'manual_norgespakke_include_handling' => isset($raw['manual_norgespakke_include_handling']) ? $this->sanitize_checkbox_value($raw['manual_norgespakke_include_handling']) : $default['manual_norgespakke_include_handling'],
 				'price_source' => $price_source,
 				'vat_percent' => isset($raw['vat_percent']) ? $this->sanitize_non_negative_number($raw['vat_percent']) : 0,
@@ -1087,6 +1091,7 @@ class LP_Cargonizer_Connector {
 					var isManual = !!option.is_manual;
 					var deliveryToPickupPoint = !!option.delivery_to_pickup_point;
 					var deliveryToHome = !!option.delivery_to_home;
+					var disableOptimization = !!option.disable_optimization;
 					var deliveryTypes = [];
 					if (deliveryToPickupPoint) { deliveryTypes.push('HENTESTED'); }
 					if (deliveryToHome) { deliveryTypes.push('HJEMLEVERING'); }
@@ -1104,7 +1109,7 @@ class LP_Cargonizer_Connector {
 						});
 					}
 					html += '<label style="display:flex;gap:10px;align-items:flex-start;padding:10px;border:1px solid #dcdcde;background:#fff;line-height:1.35;">' +
-						'<input type="checkbox" class="lp-shipping-option" data-method-key="'+esc(option.key || '')+'" data-agreement-id="'+esc(option.agreement_id || '')+'" data-agreement-name="'+esc(option.agreement_name || '')+'" data-agreement-description="'+esc(option.agreement_description || '')+'" data-agreement-number="'+esc(option.agreement_number || '')+'" data-carrier-id="'+esc(option.carrier_id || '')+'" data-carrier-name="'+esc(option.carrier_name || '')+'" data-product-id="'+esc(option.product_id || '')+'" data-product-name="'+esc(option.product_name || '')+'" data-is-manual="'+(isManual ? '1' : '')+'" data-is-manual-norgespakke="'+(isManualNorgespakke ? '1' : '')+'" data-delivery-to-pickup-point="'+(deliveryToPickupPoint ? '1' : '')+'" data-delivery-to-home="'+(deliveryToHome ? '1' : '')+'" data-sms-service-id="'+esc(smsServiceId)+'" data-sms-service-name="'+esc(smsServiceName)+'">' +
+						'<input type="checkbox" class="lp-shipping-option" data-method-key="'+esc(option.key || '')+'" data-agreement-id="'+esc(option.agreement_id || '')+'" data-agreement-name="'+esc(option.agreement_name || '')+'" data-agreement-description="'+esc(option.agreement_description || '')+'" data-agreement-number="'+esc(option.agreement_number || '')+'" data-carrier-id="'+esc(option.carrier_id || '')+'" data-carrier-name="'+esc(option.carrier_name || '')+'" data-product-id="'+esc(option.product_id || '')+'" data-product-name="'+esc(option.product_name || '')+'" data-is-manual="'+(isManual ? '1' : '')+'" data-is-manual-norgespakke="'+(isManualNorgespakke ? '1' : '')+'" data-delivery-to-pickup-point="'+(deliveryToPickupPoint ? '1' : '')+'" data-delivery-to-home="'+(deliveryToHome ? '1' : '')+'" data-disable-optimization="'+(disableOptimization ? '1' : '')+'" data-sms-service-id="'+esc(smsServiceId)+'" data-sms-service-name="'+esc(smsServiceName)+'">' +
 						'<span style="display:flex;flex-direction:column;gap:3px;">' +
 							'<strong>'+esc(label)+(isManual ? ' <span style="font-weight:400;color:#646970;">(manuell)</span>' : '')+'</strong>' +
 							'<span style="color:#646970;">Transportør: '+esc(option.carrier_name || '—')+'</span>' +
@@ -1157,7 +1162,8 @@ class LP_Cargonizer_Connector {
 						sms_service_id: input.getAttribute('data-sms-service-id') || '',
 						sms_service_name: input.getAttribute('data-sms-service-name') || '',
 						delivery_to_pickup_point: input.getAttribute('data-delivery-to-pickup-point') === '1',
-						delivery_to_home: input.getAttribute('data-delivery-to-home') === '1'
+						delivery_to_home: input.getAttribute('data-delivery-to-home') === '1',
+						disable_optimization: input.getAttribute('data-disable-optimization') === '1'
 					});
 				});
 				return selected;
@@ -1629,7 +1635,7 @@ class LP_Cargonizer_Connector {
 				var methodData = getMethodDataByKey(methodKey);
 				if (!methodData) { return; }
 				var isDsvMethod = ((methodData.carrier_id || '') + ' ' + (methodData.carrier_name || '')).toLowerCase().indexOf('dsv') !== -1;
-				var shouldRunProgressiveDsv = isDsvMethod && colli.payload.packages.length > 1;
+				var shouldRunProgressiveDsv = isDsvMethod && !methodData.disable_optimization && colli.payload.packages.length > 1;
 				var form = new FormData();
 				form.append('action', shouldRunProgressiveDsv ? 'lp_cargonizer_run_bulk_estimate_baseline' : 'lp_cargonizer_run_bulk_estimate');
 				form.append('nonce', shouldRunProgressiveDsv
@@ -2198,6 +2204,7 @@ class LP_Cargonizer_Connector {
 			$pricing = isset($method_pricing[$method_key]) && is_array($method_pricing[$method_key]) ? $method_pricing[$method_key] : $this->get_default_method_pricing();
 			$option['delivery_to_pickup_point'] = !empty($pricing['delivery_to_pickup_point']);
 			$option['delivery_to_home'] = !empty($pricing['delivery_to_home']);
+			$option['disable_optimization'] = !empty($pricing['disable_optimization']);
 		}
 		unset($option);
 
@@ -3871,7 +3878,7 @@ class LP_Cargonizer_Connector {
 			}
 
 
-			if ($this->is_dsv_method($method_payload) && count($clean_packages) > 1 && $is_baseline_flow) {
+			if ($this->is_dsv_method($method_payload) && empty($pricing_config['disable_optimization']) && count($clean_packages) > 1 && $is_baseline_flow) {
 				$baseline_estimate = $this->run_consignment_estimate_for_packages($clean_packages, $recipient, $method_payload, $pricing_config);
 				$item = $this->apply_estimate_result_to_item($item, $baseline_estimate, $method_payload, $recipient);
 				$item['optimization_debug'] = array(
@@ -3893,7 +3900,7 @@ class LP_Cargonizer_Connector {
 				continue;
 			}
 
-			if ($this->is_dsv_method($method_payload) && count($clean_packages) > 1) {
+			if ($this->is_dsv_method($method_payload) && empty($pricing_config['disable_optimization']) && count($clean_packages) > 1) {
 				$baseline_estimate = $this->run_consignment_estimate_for_packages($clean_packages, $recipient, $method_payload, $pricing_config);
 				$item = $this->apply_estimate_result_to_item($item, $baseline_estimate, $method_payload, $recipient);
 				$dsv_optimization = $this->optimize_dsv_partition_estimates($clean_packages, $recipient, $method_payload, $pricing_config, $baseline_estimate);
@@ -4136,7 +4143,8 @@ class LP_Cargonizer_Connector {
 				'is_manual' => !empty($method['is_manual']),
 			);
 			$method_key = implode('|', array($method_payload['agreement_id'], $method_payload['product_id']));
-			if (!isset($enabled_map[$method_key]) || !$this->is_dsv_method($method_payload) || count($clean_packages) <= 1) {
+			$pricing_config = isset($method_pricing[$method_key]) && is_array($method_pricing[$method_key]) ? $method_pricing[$method_key] : $this->get_default_method_pricing();
+			if (!isset($enabled_map[$method_key]) || !$this->is_dsv_method($method_payload) || !empty($pricing_config['disable_optimization']) || count($clean_packages) <= 1) {
 				continue;
 			}
 			if ($method_payload['sms_service_id'] === '') {
@@ -4145,7 +4153,6 @@ class LP_Cargonizer_Connector {
 				$method_payload['sms_service_name'] = $sms_service['service_name'];
 			}
 
-			$pricing_config = isset($method_pricing[$method_key]) && is_array($method_pricing[$method_key]) ? $method_pricing[$method_key] : $this->get_default_method_pricing();
 			$discount_percent = isset($pricing_config['discount_percent']) ? $this->sanitize_discount_percent($pricing_config['discount_percent']) : 0;
 			$fuel_percent = isset($pricing_config['fuel_surcharge']) ? $this->sanitize_non_negative_number($pricing_config['fuel_surcharge']) : 0;
 			$toll_surcharge = isset($pricing_config['toll_surcharge']) ? $this->sanitize_non_negative_number($pricing_config['toll_surcharge']) : 0;
@@ -4470,8 +4477,9 @@ class LP_Cargonizer_Connector {
 										$vat_percent = $this->sanitize_non_negative_number(isset($pricing['vat_percent']) ? $pricing['vat_percent'] : 0);
 										$rounding_mode = $this->sanitize_rounding_mode(isset($pricing['rounding_mode']) ? $pricing['rounding_mode'] : 'none');
 										$delivery_to_pickup_point = isset($pricing['delivery_to_pickup_point']) ? (bool) $this->sanitize_checkbox_value($pricing['delivery_to_pickup_point']) : false;
-										$delivery_to_home = isset($pricing['delivery_to_home']) ? (bool) $this->sanitize_checkbox_value($pricing['delivery_to_home']) : true;
-										$include_manual_norgespakke_handling = isset($pricing['manual_norgespakke_include_handling']) ? (bool) $this->sanitize_checkbox_value($pricing['manual_norgespakke_include_handling']) : true;
+									$delivery_to_home = isset($pricing['delivery_to_home']) ? (bool) $this->sanitize_checkbox_value($pricing['delivery_to_home']) : true;
+									$disable_optimization = isset($pricing['disable_optimization']) ? (bool) $this->sanitize_checkbox_value($pricing['disable_optimization']) : false;
+									$include_manual_norgespakke_handling = isset($pricing['manual_norgespakke_include_handling']) ? (bool) $this->sanitize_checkbox_value($pricing['manual_norgespakke_include_handling']) : true;
 										$is_manual_norgespakke_method = $this->is_manual_norgespakke_method($method);
 								?>
 								<div style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px solid #f0f0f1;">
@@ -4533,8 +4541,13 @@ class LP_Cargonizer_Connector {
 												<option value="price_ending_9" <?php selected($rounding_mode, 'price_ending_9'); ?>>Slutt på 9</option>
 											</select>
 										</label>
-										<label style="display:flex;flex-direction:column;gap:4px;">
-											<span>Leveringstype</span><small style="color:#646970;">Velg hvor denne tjenesten leverer til.</small>
+									<label style="display:flex;flex-direction:column;gap:4px;">
+										<span>Ikke optimaliser</span><small style="color:#646970;">Når aktiv, hoppes DSV-partisjonering/delsendinger over og baseline-estimat beholdes.</small>
+										<input type="hidden" class="lp-cargonizer-method-input" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][disable_optimization]" value="0" <?php disabled(!$is_enabled); ?>>
+										<input class="lp-cargonizer-method-input" type="checkbox" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][disable_optimization]" value="1" <?php checked($disable_optimization); ?> <?php disabled(!$is_enabled); ?>>
+									</label>
+									<label style="display:flex;flex-direction:column;gap:4px;">
+										<span>Leveringstype</span><small style="color:#646970;">Velg hvor denne tjenesten leverer til.</small>
 											<span style="display:flex;gap:10px;flex-wrap:wrap;">
 												<label style="display:flex;align-items:center;gap:5px;">
 													<input type="hidden" class="lp-cargonizer-method-input" name="lp_cargonizer_method_pricing[<?php echo esc_attr($method_key); ?>][delivery_to_pickup_point]" value="0" <?php disabled(!$is_enabled); ?>>
