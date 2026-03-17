@@ -4200,11 +4200,17 @@ class LP_Cargonizer_Connector {
 			&& isset($_POST['_wpnonce'])
 			&& wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['_wpnonce'])), self::NONCE_ACTION_SAVE)
 		) {
+			$posted_enabled_methods = isset($_POST['lp_cargonizer_enabled_methods']) && is_array($_POST['lp_cargonizer_enabled_methods'])
+				? array_map('sanitize_text_field', wp_unslash($_POST['lp_cargonizer_enabled_methods']))
+				: null;
+
 			$new_settings = array(
 				'api_key'   => isset($_POST['lp_cargonizer_api_key']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_api_key'])) : '',
 				'sender_id' => isset($_POST['lp_cargonizer_sender_id']) ? sanitize_text_field(wp_unslash($_POST['lp_cargonizer_sender_id'])) : '',
 				'available_methods' => isset($settings['available_methods']) && is_array($settings['available_methods']) ? $settings['available_methods'] : array(),
-				'enabled_methods' => isset($_POST['lp_cargonizer_enabled_methods']) && is_array($_POST['lp_cargonizer_enabled_methods']) ? array_map('sanitize_text_field', wp_unslash($_POST['lp_cargonizer_enabled_methods'])) : array(),
+				'enabled_methods' => is_array($posted_enabled_methods)
+					? $posted_enabled_methods
+					: (isset($settings['enabled_methods']) && is_array($settings['enabled_methods']) ? $settings['enabled_methods'] : array()),
 				'method_discounts' => isset($_POST['lp_cargonizer_method_discounts']) && is_array($_POST['lp_cargonizer_method_discounts']) ? wp_unslash($_POST['lp_cargonizer_method_discounts']) : array(),
 				'method_pricing' => isset($_POST['lp_cargonizer_method_pricing']) && is_array($_POST['lp_cargonizer_method_pricing']) ? wp_unslash($_POST['lp_cargonizer_method_pricing']) : array(),
 			);
@@ -4238,11 +4244,15 @@ class LP_Cargonizer_Connector {
 			$method_refresh = $this->fetch_transport_agreements();
 			if ($method_refresh['success']) {
 				$available_methods = $this->ensure_internal_manual_methods($this->flatten_shipping_methods($method_refresh['data']));
+				$posted_enabled_methods = isset($_POST['lp_cargonizer_enabled_methods']) && is_array($_POST['lp_cargonizer_enabled_methods'])
+					? array_map('sanitize_text_field', wp_unslash($_POST['lp_cargonizer_enabled_methods']))
+					: null;
 				$enabled_map = array();
-				if (isset($settings['enabled_methods']) && is_array($settings['enabled_methods'])) {
-					foreach ($settings['enabled_methods'] as $saved_key) {
+				$enabled_source = is_array($posted_enabled_methods)
+					? $posted_enabled_methods
+					: (isset($settings['enabled_methods']) && is_array($settings['enabled_methods']) ? $settings['enabled_methods'] : array());
+				foreach ($enabled_source as $saved_key) {
 						$enabled_map[(string) $saved_key] = true;
-					}
 				}
 				$new_enabled = array();
 				foreach ($available_methods as $method) {
