@@ -312,7 +312,36 @@ final class ShippingMethodRegistry
      */
     public function getServicepartnerOptions(array $methodConfig, array $destination): array
     {
-        $payload = $this->client->fetchServicePartners();
+        $carrierId = sanitize_text_field((string) ($methodConfig['carrier_id'] ?? ''));
+        $country = strtoupper(sanitize_text_field((string) ($destination['country'] ?? '')));
+        $postcode = sanitize_text_field((string) ($destination['postcode'] ?? ''));
+        $productId = sanitize_text_field((string) ($methodConfig['product_id'] ?? ''));
+        $agreementId = sanitize_text_field((string) ($methodConfig['agreement_id'] ?? ''));
+        if ($carrierId === '' || $country === '' || $postcode === '') {
+            return [];
+        }
+
+        $query = [
+            'carrier' => $carrierId,
+            'country' => $country,
+            'postcode' => $postcode,
+        ];
+        if ($productId !== '') {
+            $query['product'] = $productId;
+        }
+        if ($agreementId !== '') {
+            $query['transport_agreement_id'] = $agreementId;
+        }
+
+        foreach ($this->resolveCarrierSpecificCustomParams($methodConfig) as $key => $value) {
+            if ($value === '') {
+                continue;
+            }
+
+            $query[(string) $key] = (string) $value;
+        }
+
+        $payload = $this->client->fetchServicePartners($query);
         if (!is_string($payload['raw'] ?? null) || !function_exists('simplexml_load_string')) {
             return [];
         }
@@ -321,12 +350,6 @@ final class ShippingMethodRegistry
         if ($document === false) {
             return [];
         }
-
-        $carrierId = sanitize_text_field((string) ($methodConfig['carrier_id'] ?? ''));
-        $country = strtoupper(sanitize_text_field((string) ($destination['country'] ?? '')));
-        $postcode = sanitize_text_field((string) ($destination['postcode'] ?? ''));
-        $productId = sanitize_text_field((string) ($methodConfig['product_id'] ?? ''));
-        $agreementId = sanitize_text_field((string) ($methodConfig['agreement_id'] ?? ''));
 
         $nodes = $document->xpath('//service_partner');
         if (!is_array($nodes)) {
@@ -338,45 +361,31 @@ final class ShippingMethodRegistry
             if (!$node instanceof \SimpleXMLElement) {
                 continue;
             }
-
-            $candidateCarrier = $this->xmlValue($node, ['carrier/id', 'carrier_id', 'carrier']);
-            $candidateCountry = strtoupper($this->xmlValue($node, ['country', 'address/country', 'visitor_address/country']));
-            $candidatePostcode = $this->xmlValue($node, ['postcode', 'zip', 'address/postcode', 'visitor_address/postcode']);
-            $candidateAgreement = $this->xmlValue($node, ['transport_agreement/id', 'transport_agreement_id', 'agreement_id']);
-            $candidateProduct = $this->xmlValue($node, ['product/id', 'product_id']);
-
-            if ($carrierId !== '' && $candidateCarrier !== '' && $candidateCarrier !== $carrierId) {
-                continue;
+            $option = $this->normalizeServicepartnerOption($node);
+            if ($option !== null) {
+                $options[$option['id']] = $option;
             }
-
-            if ($country !== '' && $candidateCountry !== '' && $candidateCountry !== $country) {
-                continue;
-            }
-
-            if ($postcode !== '' && $candidatePostcode !== '' && stripos($postcode, $candidatePostcode) !== 0 && stripos($candidatePostcode, $postcode) !== 0) {
-                continue;
-            }
-
-            if ($agreementId !== '' && $candidateAgreement !== '' && $candidateAgreement !== $agreementId) {
-                continue;
-            }
-
-            if ($productId !== '' && $candidateProduct !== '' && $candidateProduct !== $productId) {
-                continue;
-            }
-
-            $id = $this->xmlValue($node, ['number', 'id', 'service_partner_id']);
-            if ($id === '') {
-                continue;
-            }
-
-            $options[] = [
-                'id' => sanitize_text_field($id),
-                'name' => sanitize_text_field($this->xmlValue($node, ['name', 'service_partner_name'])),
-            ];
         }
 
         return array_values($options);
+    }
+
+    /**
+     * @return array{id:string,name:string}|null
+     */
+    private function normalizeServicepartnerOption(\SimpleXMLElement $node): ?array
+    {
+        $id = sanitize_text_field($this->xmlValue($node, ['number', 'id', 'service_partner_id']));
+        if ($id === '') {
+            return null;
+        }
+
+        $name = sanitize_text_field($this->xmlValue($node, ['name', 'service_partner_name']));
+
+        return [
+            'id' => $id,
+            'name' => $name !== '' ? $name : $id,
+        ];
     }
 
     /**

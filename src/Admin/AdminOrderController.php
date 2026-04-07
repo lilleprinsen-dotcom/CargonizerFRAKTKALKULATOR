@@ -571,7 +571,15 @@ final class AdminOrderController
                         if (!response.success) return;
                         const opts = (response.data && response.data.servicepartners) || [];
                         if (!Array.isArray(opts)) return;
-                        target.innerHTML = `<option value="">Velg …</option>${opts.map((sp) => `<option value="${esc(sp.id)}">${esc(sp.name || sp.id)}</option>`).join('')}`;
+                        const normalized = opts
+                            .map((sp) => {
+                                const value = String((sp && (sp.id || sp.value)) || '').trim();
+                                if (!value) return null;
+                                const label = String((sp && (sp.name || sp.label || value)) || value).trim() || value;
+                                return { id: value, name: label };
+                            })
+                            .filter(Boolean);
+                        target.innerHTML = `<option value="">Velg …</option>${normalized.map((sp) => `<option value="${esc(sp.id)}">${esc(sp.name)}</option>`).join('')}`;
                         target.dataset.loaded = '1';
                     } catch (e) {
                         // no-op
