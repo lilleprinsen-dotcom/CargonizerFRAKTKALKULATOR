@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<ruleset name="Lilleprinsen Cargonizer">
+  <description>WordPress and WooCommerce coding standards.</description>
+  <file>cargonizer-woocommerce.php</file>
+  <file>src</file>
+  <file>templates</file>
+  <file>tests</file>
+
+  <rule ref="WordPress-Core"/>
+  <rule ref="WordPress-Extra"/>
+  <rule ref="WordPress-Docs"/>
+  <rule ref="PHPCompatibilityWP">
+    <properties>
+      <property name="testVersion" value="7.4-"/>
+    </properties>
+  </rule>
+</ruleset>

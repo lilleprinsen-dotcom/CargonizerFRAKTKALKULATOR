@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  quality-and-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['7.4', '8.0', '8.1', '8.2', '8.3']
+        woocommerce: ['7.0.0', '8.0.0', '9.0.0', '10.2.0']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          tools: composer
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist
+      - name: Lint (PHPCS)
+        run: composer lint:phpcs
+      - name: Static analysis (PHPStan)
+        run: composer lint:phpstan
+      - name: Static analysis (Psalm)
+        run: composer lint:psalm
+      - name: Run PHPUnit suites
+        env:
+          WC_VERSION_UNDER_TEST: ${{ matrix.woocommerce }}
+        run: |
+          composer test:unit
+          composer test:integration
+          composer test:e2e

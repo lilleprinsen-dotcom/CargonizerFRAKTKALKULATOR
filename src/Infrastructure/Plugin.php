@@ -28,6 +28,10 @@ final class Plugin
 
     public function boot(): void
     {
+        /** @var MigrationManager $migrations */
+        $migrations = $this->container->get(MigrationManager::class);
+        $migrations->migrate();
+
         /** @var HooksRegistrar $hooks */
         $hooks = $this->container->get(HooksRegistrar::class);
         $hooks->register();
@@ -36,6 +40,7 @@ final class Plugin
     private function registerServices(): void
     {
         $this->container->set(SettingsRepository::class, fn (): SettingsRepository => new SettingsRepository());
+        $this->container->set(MigrationManager::class, fn (ServiceContainer $c): MigrationManager => new MigrationManager((string) LP_CARGONIZER_VERSION, $c->get(SettingsRepository::class)));
         $this->container->set(SettingsService::class, fn (ServiceContainer $c): SettingsService => new SettingsService($c->get(SettingsRepository::class)));
         $this->container->set(CargonizerClient::class, fn (ServiceContainer $c): CargonizerClient => new CargonizerClient($c->get(SettingsService::class)));
         $this->container->set(RateCalculator::class, fn (): RateCalculator => new RateCalculator());
