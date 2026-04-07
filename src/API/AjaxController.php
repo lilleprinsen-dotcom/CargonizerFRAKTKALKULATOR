@@ -207,16 +207,21 @@ final class AjaxController
         }
 
         $results = [];
+        $recipient = [
+            'name' => trim((string) $order->get_formatted_shipping_full_name()) ?: trim((string) $order->get_formatted_billing_full_name()),
+            'address1' => (string) $order->get_shipping_address_1(),
+            'address2' => (string) $order->get_shipping_address_2(),
+            'postcode' => (string) $order->get_shipping_postcode(),
+            'city' => (string) $order->get_shipping_city(),
+            'country' => (string) $order->get_shipping_country(),
+        ];
+
         foreach ($methods as $method) {
             if (!is_array($method)) {
                 continue;
             }
 
-            $results[] = [
-                'method_id' => (string) ($method['method_id'] ?? ''),
-                'title' => (string) ($method['title'] ?? ($method['method_id'] ?? '')),
-                'rate' => $this->shippingRegistry->resolveRate($method, $package),
-            ];
+            $results[] = $this->shippingRegistry->resolveAdminEstimate($method, $package, $recipient);
         }
 
         wp_send_json_success([
