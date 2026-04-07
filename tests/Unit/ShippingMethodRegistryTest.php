@@ -161,6 +161,87 @@ XML;
         self::assertSame('manual|norgespakke', $methods[1]['key']);
     }
 
+    public function testRefreshFromCargonizerPrefersDocumentedIdentifierOverLegacyId(): void
+    {
+        $xml = <<<'XML'
+<?xml version="1.0" encoding="UTF-8"?>
+<transport-agreements>
+  <transport-agreement>
+    <identifier>DOC-99</identifier>
+    <id>LEGACY-99</id>
+    <description>Avtale</description>
+    <carrier>
+      <identifier>CARRIER-DOC</identifier>
+      <id>CARRIER-LEGACY</id>
+      <name>PostNord</name>
+    </carrier>
+    <products>
+      <product>
+        <identifier>PROD-DOC</identifier>
+        <id>PROD-LEGACY</id>
+        <name>Hjemlevering</name>
+        <services>
+          <service>
+            <identifier>SRV-DOC</identifier>
+            <id>SRV-LEGACY</id>
+            <name>Kvittering</name>
+          </service>
+        </services>
+      </product>
+    </products>
+  </transport-agreement>
+</transport-agreements>
+XML;
+
+        $settings = $this->createMock(SettingsService::class);
+        $settings->method('getSettings')->willReturn(['available_methods' => []]);
+        $settings->expects(self::once())->method('save');
+
+        $client = $this->createMock(CargonizerClient::class);
+        $client->method('fetchTransportAgreements')->willReturn(['raw' => $xml]);
+        $calculator = $this->createMock(RateCalculator::class);
+        $registry = new ShippingMethodRegistry($settings, $client, $client, $calculator);
+
+        $methods = $registry->refreshFromCargonizer();
+
+        self::assertSame('DOC-99|PROD-DOC', $methods[0]['key']);
+        self::assertSame('DOC-99', $methods[0]['agreement_id']);
+        self::assertSame('CARRIER-DOC', $methods[0]['carrier_id']);
+        self::assertSame('PROD-DOC', $methods[0]['product_id']);
+        self::assertSame('SRV-DOC', $methods[0]['services'][0]['service_id']);
+    }
+
+    public function testGetServicepartnerOptionsSupportsHyphenatedNodeAndPrefersIdentifier(): void
+    {
+        $xml = <<<'XML'
+<?xml version="1.0" encoding="UTF-8"?>
+<service-partners>
+  <service-partner>
+    <identifier>SP-DOC</identifier>
+    <id>SP-LEGACY</id>
+    <name>Partner A</name>
+  </service-partner>
+</service-partners>
+XML;
+
+        $settings = $this->createMock(SettingsService::class);
+        $settings->method('getSettings')->willReturn([]);
+
+        $client = $this->createMock(CargonizerClient::class);
+        $client->method('fetchServicePartners')->willReturn(['raw' => $xml]);
+        $calculator = $this->createMock(RateCalculator::class);
+        $registry = new ShippingMethodRegistry($settings, $client, $client, $calculator);
+
+        $options = $registry->getServicepartnerOptions(
+            ['carrier_id' => '301', 'product_id' => 'PROD-1', 'agreement_id' => 'AGR-1'],
+            ['country' => 'NO', 'postcode' => '0150']
+        );
+
+        self::assertCount(1, $options);
+        self::assertSame('SP-DOC', $options[0]['id']);
+        self::assertSame('Partner A', $options[0]['name']);
+    }
+
     public function testResolveAdminEstimateCalculatesManualNorgespakkeAndManualHandlingDebug(): void
     {
         $settings = $this->createMock(SettingsService::class);
