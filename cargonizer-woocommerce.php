@@ -46,6 +46,8 @@ function lp_cargonizer_container(?Lilleprinsen\Cargonizer\Infrastructure\Service
     return $instance;
 }
 
-$container = lp_cargonizer_container();
-$plugin = new Lilleprinsen\Cargonizer\Infrastructure\Plugin($container);
-$plugin->boot();
+add_action('plugins_loaded', static function (): void {
+    $container = lp_cargonizer_container();
+    $plugin = new Lilleprinsen\Cargonizer\Infrastructure\Plugin($container);
+    $plugin->boot();
+}, 20);
