@@ -49,6 +49,26 @@ final class ShippingMethodRegistry
         return [];
     }
 
+    public function getMethodConfigByMethodId(string $methodId): array
+    {
+        $methodId = sanitize_key($methodId);
+        if ($methodId === '') {
+            return [];
+        }
+
+        foreach ($this->all() as $method) {
+            if (!is_array($method)) {
+                continue;
+            }
+
+            if (sanitize_key((string) ($method['method_id'] ?? '')) === $methodId) {
+                return $method;
+            }
+        }
+
+        return [];
+    }
+
     public function getMethodClassMap(): array
     {
         $map = [];
