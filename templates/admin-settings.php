@@ -102,7 +102,7 @@
                 <th scope="row"><label for="lp-cargonizer-sender-id">Sender ID</label></th>
                 <td>
                     <input id="lp-cargonizer-sender-id" type="text" name="lp_cargonizer_settings[sender_id]" value="" class="regular-text" placeholder="Leave blank to keep current sender" />
-                    <p class="description">Leave blank to keep existing sender ID.</p>
+                    <p class="description">Use the sender/user relation ID from Cargonizer Preferences. Non-digit characters are ignored automatically.</p>
                 </td>
             </tr>
         </table>
