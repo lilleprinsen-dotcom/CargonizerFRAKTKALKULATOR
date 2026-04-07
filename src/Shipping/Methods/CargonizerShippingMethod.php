@@ -20,6 +20,9 @@ class CargonizerShippingMethod extends \WC_Shipping_Method
         $this->registry = $registry;
 
         $methodConfig = $this->registry->getMethodConfigByInstanceId($this->instance_id);
+        if ($methodConfig === []) {
+            $methodConfig = $this->registry->getMethodConfigByMethodId($this->id);
+        }
 
         $this->title = (string) ($methodConfig['title'] ?? __('Cargonizer shipping', 'lp-cargonizer'));
         $this->enabled = (string) ($methodConfig['enabled'] ?? 'yes');
@@ -52,7 +55,10 @@ class CargonizerShippingMethod extends \WC_Shipping_Method
     {
         $methodConfig = $this->registry->getMethodConfigByInstanceId($this->instance_id);
         if ($methodConfig === []) {
-            return;
+            $methodConfig = $this->registry->getMethodConfigByMethodId($this->id);
+            if ($methodConfig === []) {
+                return;
+            }
         }
 
         $rate = $this->registry->resolveRate($methodConfig, is_array($package) ? $package : []);
