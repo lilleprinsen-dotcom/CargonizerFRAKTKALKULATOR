@@ -243,9 +243,13 @@ final class CargonizerClient implements RateProviderInterface
         $status = (int) wp_remote_retrieve_response_code($response);
         $rawXml = wp_remote_retrieve_body($response);
 
+        $errorMessage = $this->extractFirstXmlErrorMessage(is_string($rawXml) ? $rawXml : '');
+
         return [
             'ok' => $status >= 200 && $status < 300,
-            'message' => $status >= 200 && $status < 300 ? 'Connection successful.' : 'Connection failed.',
+            'message' => $status >= 200 && $status < 300
+                ? 'Connection successful.'
+                : ($errorMessage !== '' ? sprintf('Connection failed: %s', $errorMessage) : 'Connection failed.'),
             'correlation_id' => $correlationId,
             'status' => $status,
             'raw_xml' => is_string($rawXml) ? trim((string) $this->maskSecrets($rawXml)) : '',
@@ -365,6 +369,40 @@ final class CargonizerClient implements RateProviderInterface
         $timeout = (int) apply_filters('lp_cargonizer_api_timeout', self::DEFAULT_TIMEOUT_SECONDS);
 
         return max(1, min(30, $timeout));
+    }
+
+    private function extractFirstXmlErrorMessage(string $rawXml): string
+    {
+        if ($rawXml === '' || !function_exists('simplexml_load_string')) {
+            return '';
+        }
+
+        $xml = @simplexml_load_string($rawXml);
+        if (!$xml instanceof \SimpleXMLElement) {
+            return '';
+        }
+
+        if (isset($xml->error)) {
+            $error = trim((string) $xml->error);
+            if ($error !== '') {
+                return $error;
+            }
+        }
+
+        if (isset($xml->errors->error)) {
+            foreach ($xml->errors->error as $errorNode) {
+                if (!$errorNode instanceof \SimpleXMLElement) {
+                    continue;
+                }
+
+                $error = trim((string) $errorNode);
+                if ($error !== '') {
+                    return $error;
+                }
+            }
+        }
+
+        return '';
     }
 
     /**
