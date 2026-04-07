@@ -171,10 +171,10 @@ final class CargonizerClient implements RateProviderInterface
      * @param array<string,mixed> $methodConfig
      * @return array<string,mixed>
      */
-    public function estimateConsignmentCost(array $recipient, array $packages, array $methodConfig): array
+    public function estimateConsignmentCost(array $recipient, array $packages, array $methodConfig, array $estimateOptions = []): array
     {
         $correlationId = wp_generate_uuid4();
-        $xmlBody = $this->buildConsignmentCostEstimateXml($recipient, $packages, $methodConfig);
+        $xmlBody = $this->buildConsignmentCostEstimateXml($recipient, $packages, $methodConfig, $estimateOptions);
         $response = $this->requestWithRetry(
             'POST',
             'consignment_costs',
@@ -214,6 +214,12 @@ final class CargonizerClient implements RateProviderInterface
             'raw_xml' => is_string($rawXml) ? trim((string) $this->maskSecrets($rawXml)) : '',
             'errors' => $parsed['errors'],
             'prices' => $parsed['prices'],
+            'requirements' => $parsed['requirements'],
+            'debug' => [
+                'selected_servicepartner' => sanitize_text_field((string) ($estimateOptions['service_partner'] ?? '')),
+                'selected_sms_service_id' => sanitize_text_field((string) ($estimateOptions['sms_service_id'] ?? '')),
+                'custom_params' => isset($estimateOptions['custom_params']) && is_array($estimateOptions['custom_params']) ? $estimateOptions['custom_params'] : [],
+            ],
         ];
     }
 
@@ -468,13 +474,59 @@ final class CargonizerClient implements RateProviderInterface
      * @param array<int,array<string,mixed>> $packages
      * @param array<string,mixed> $methodConfig
      */
-    private function buildConsignmentCostEstimateXml(array $recipient, array $packages, array $methodConfig): string
+    private function buildConsignmentCostEstimateXml(array $recipient, array $packages, array $methodConfig, array $estimateOptions = []): string
     {
         $xml = [];
         $xml[] = '<?xml version="1.0" encoding="UTF-8"?>';
         $xml[] = '<consignment>';
         $xml[] = '<transport_agreement><id>' . $this->xmlEscape((string) ($methodConfig['agreement_id'] ?? '')) . '</id></transport_agreement>';
         $xml[] = '<product><id>' . $this->xmlEscape((string) ($methodConfig['product_id'] ?? '')) . '</id></product>';
+        $servicePartner = sanitize_text_field((string) ($estimateOptions['service_partner'] ?? ''));
+        if ($servicePartner !== '') {
+            $xml[] = '<service_partner><number>' . $this->xmlEscape($servicePartner) . '</number></service_partner>';
+        }
+
+        $services = isset($estimateOptions['services']) && is_array($estimateOptions['services']) ? $estimateOptions['services'] : [];
+        if ($services !== []) {
+            $xml[] = '<services>';
+            foreach ($services as $service) {
+                if (!is_array($service)) {
+                    continue;
+                }
+
+                $serviceId = sanitize_text_field((string) ($service['id'] ?? ''));
+                if ($serviceId === '') {
+                    continue;
+                }
+
+                $xml[] = '<service>';
+                $xml[] = '<id>' . $this->xmlEscape($serviceId) . '</id>';
+                if (isset($service['value']) && (string) $service['value'] !== '') {
+                    $xml[] = '<value>' . $this->xmlEscape((string) $service['value']) . '</value>';
+                }
+                $xml[] = '</service>';
+            }
+            $xml[] = '</services>';
+        }
+
+        $customParams = isset($estimateOptions['custom_params']) && is_array($estimateOptions['custom_params']) ? $estimateOptions['custom_params'] : [];
+        if ($customParams !== []) {
+            $xml[] = '<customs>';
+            foreach ($customParams as $customName => $customValue) {
+                $name = sanitize_text_field((string) $customName);
+                $value = sanitize_text_field((string) $customValue);
+                if ($name === '' || $value === '') {
+                    continue;
+                }
+
+                $xml[] = '<custom>';
+                $xml[] = '<name>' . $this->xmlEscape($name) . '</name>';
+                $xml[] = '<value>' . $this->xmlEscape($value) . '</value>';
+                $xml[] = '</custom>';
+            }
+            $xml[] = '</customs>';
+        }
+
         $xml[] = '<recipient>';
         $xml[] = '<name>' . $this->xmlEscape((string) ($recipient['name'] ?? '')) . '</name>';
         $xml[] = '<address1>' . $this->xmlEscape((string) ($recipient['address1'] ?? '')) . '</address1>';
@@ -506,7 +558,7 @@ final class CargonizerClient implements RateProviderInterface
     }
 
     /**
-     * @return array{errors:array<int,array<string,string>>,prices:array<string,float|null>}
+     * @return array{errors:array<int,array<string,string>>,prices:array<string,float|null>,requirements:array<string,mixed>}
      */
     private function parseConsignmentCostEstimateXml(string $xml): array
     {
@@ -514,6 +566,7 @@ final class CargonizerClient implements RateProviderInterface
             return [
                 'errors' => [['message' => 'XML parser is unavailable on this host.']],
                 'prices' => [],
+                'requirements' => [],
             ];
         }
 
@@ -522,6 +575,7 @@ final class CargonizerClient implements RateProviderInterface
             return [
                 'errors' => [['message' => 'Empty XML response from Cargonizer.']],
                 'prices' => [],
+                'requirements' => [],
             ];
         }
 
@@ -530,6 +584,7 @@ final class CargonizerClient implements RateProviderInterface
             return [
                 'errors' => [['message' => 'Could not parse XML response from Cargonizer.']],
                 'prices' => [],
+                'requirements' => [],
             ];
         }
 
@@ -549,6 +604,26 @@ final class CargonizerClient implements RateProviderInterface
             }
         }
 
+        $requirementFlags = [
+            'servicepartner_required' => false,
+            'sms_required' => false,
+        ];
+
+        foreach ($errors as $error) {
+            $haystack = strtolower(trim((string) (($error['field'] ?? '') . ' ' . ($error['message'] ?? '') . ' ' . ($error['code'] ?? ''))));
+            if ($haystack === '') {
+                continue;
+            }
+
+            if (strpos($haystack, 'servicepartner') !== false || strpos($haystack, 'service partner') !== false || strpos($haystack, 'service_partner') !== false) {
+                $requirementFlags['servicepartner_required'] = true;
+            }
+
+            if (strpos($haystack, 'sms') !== false) {
+                $requirementFlags['sms_required'] = true;
+            }
+        }
+
         return [
             'errors' => $errors,
             'prices' => [
@@ -558,6 +633,7 @@ final class CargonizerClient implements RateProviderInterface
                 'price' => $this->xmlNodeFloat($document, ['//price', '//amount']),
                 'total' => $this->xmlNodeFloat($document, ['//total', '//total_amount']),
             ],
+            'requirements' => $requirementFlags,
         ];
     }
 

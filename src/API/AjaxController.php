@@ -187,15 +187,27 @@ final class AjaxController
         }
 
         $jobs = [];
+        $preparedMethods = [];
+        $methodOverrides = isset($_REQUEST['method_overrides']) ? json_decode(wp_unslash((string) $_REQUEST['method_overrides']), true) : []; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+        $methodOverrides = is_array($methodOverrides) ? $methodOverrides : [];
         foreach ($methods as $method) {
             if (!is_array($method)) {
                 continue;
+            }
+
+            $override = isset($methodOverrides[(string) ($method['method_id'] ?? '')]) && is_array($methodOverrides[(string) ($method['method_id'] ?? '')])
+                ? $methodOverrides[(string) ($method['method_id'] ?? '')]
+                : [];
+            if ($override !== []) {
+                $method['service_partner'] = sanitize_text_field((string) ($override['service_partner'] ?? ''));
+                $method['sms_enabled'] = !empty($override['sms_enabled']) ? 'yes' : 'no';
             }
 
             $jobs[] = [
                 'method' => $method,
                 'package' => $package,
             ];
+            $preparedMethods[] = $method;
         }
 
         $jobId = $this->shippingRegistry->enqueueBulkEstimate($jobs);
@@ -216,12 +228,20 @@ final class AjaxController
             'country' => (string) $order->get_shipping_country(),
         ];
 
-        foreach ($methods as $method) {
+        foreach ($preparedMethods as $method) {
             if (!is_array($method)) {
                 continue;
             }
 
-            $results[] = $this->shippingRegistry->resolveAdminEstimate($method, $package, $recipient);
+            $result = $this->shippingRegistry->resolveAdminEstimate($method, $package, $recipient);
+            $requirements = isset($result['estimate']['requirements']) && is_array($result['estimate']['requirements'])
+                ? $result['estimate']['requirements']
+                : [];
+            if (!empty($requirements['servicepartner_required'])) {
+                $result['servicepartner_options'] = $this->shippingRegistry->getServicepartnerOptions($method, $package['destination']);
+            }
+
+            $results[] = $result;
         }
 
         wp_send_json_success([
@@ -233,26 +253,19 @@ final class AjaxController
     public function getServicepartnerOptions(): void
     {
         $this->assertAjaxCapabilityAndNonce('lp_cargonizer_get_servicepartner_options');
-
-        $partners = [];
-        foreach ($this->shippingRegistry->all() as $method) {
-            if (!is_array($method)) {
-                continue;
-            }
-
-            $agreementId = sanitize_text_field((string) ($method['agreement_id'] ?? ''));
-            if ($agreementId === '') {
-                continue;
-            }
-
-            $partners[$agreementId] = [
-                'agreement_id' => $agreementId,
-                'name' => sanitize_text_field((string) ($method['agreement_name'] ?? $agreementId)),
-            ];
-        }
+        $methodId = sanitize_text_field((string) ($_REQUEST['method_id'] ?? '')); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+        $method = $this->shippingRegistry->getMethodConfigByMethodId($methodId);
+        $destination = isset($_REQUEST['destination']) ? json_decode(wp_unslash((string) $_REQUEST['destination']), true) : []; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+        $destination = is_array($destination) ? $destination : [];
+        $partners = $this->shippingRegistry->getServicepartnerOptions($method, $destination);
 
         wp_send_json_success([
-            'servicepartners' => array_values($partners),
+            'servicepartners' => $partners,
+            'debug' => [
+                'method_id' => $methodId,
+                'destination' => $destination,
+                'count' => count($partners),
+            ],
         ]);
     }
 

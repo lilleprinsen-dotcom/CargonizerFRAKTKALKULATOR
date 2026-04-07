@@ -235,10 +235,26 @@ final class ShippingMethodRegistry
     {
         $methodId = (string) ($methodConfig['method_id'] ?? '');
         $fallbackRate = $this->getFallbackRate($methodConfig);
+        $customParams = $this->resolveCarrierSpecificCustomParams($methodConfig);
+        $services = [];
+        $smsEnabled = (string) ($methodConfig['sms_enabled'] ?? '') === 'yes';
+        if ($smsEnabled) {
+            $smsServiceId = $this->resolveSmsServiceId($methodConfig);
+            if ($smsServiceId !== '') {
+                $services[] = ['id' => $smsServiceId];
+            }
+        }
+
         $result = $this->client->estimateConsignmentCost(
             $recipient,
             $this->extractPackagesFromPackageInput($package),
-            $methodConfig
+            $methodConfig,
+            [
+                'service_partner' => sanitize_text_field((string) ($methodConfig['service_partner'] ?? '')),
+                'services' => $services,
+                'sms_service_id' => isset($services[0]['id']) ? (string) $services[0]['id'] : '',
+                'custom_params' => $customParams,
+            ]
         );
 
         $prices = is_array($result['prices'] ?? null) ? $result['prices'] : [];
@@ -260,7 +276,142 @@ final class ShippingMethodRegistry
             'price_source' => $this->getMethodPriceSource($methodConfig),
             'fallback_rate' => $fallbackRate,
             'estimate' => $result,
+            'supports_sms' => $this->resolveSmsServiceId($methodConfig) !== '',
         ];
+    }
+
+    /**
+     * @param array<string,mixed> $methodConfig
+     * @param array<string,mixed> $destination
+     * @return array<int,array<string,string>>
+     */
+    public function getServicepartnerOptions(array $methodConfig, array $destination): array
+    {
+        $payload = $this->client->fetchServicePartners();
+        if (!is_string($payload['raw'] ?? null) || !function_exists('simplexml_load_string')) {
+            return [];
+        }
+
+        $document = @simplexml_load_string((string) $payload['raw']);
+        if ($document === false) {
+            return [];
+        }
+
+        $carrierId = sanitize_text_field((string) ($methodConfig['carrier_id'] ?? ''));
+        $country = strtoupper(sanitize_text_field((string) ($destination['country'] ?? '')));
+        $postcode = sanitize_text_field((string) ($destination['postcode'] ?? ''));
+        $productId = sanitize_text_field((string) ($methodConfig['product_id'] ?? ''));
+        $agreementId = sanitize_text_field((string) ($methodConfig['agreement_id'] ?? ''));
+
+        $nodes = $document->xpath('//service_partner');
+        if (!is_array($nodes)) {
+            return [];
+        }
+
+        $options = [];
+        foreach ($nodes as $node) {
+            if (!$node instanceof \SimpleXMLElement) {
+                continue;
+            }
+
+            $candidateCarrier = $this->xmlValue($node, ['carrier/id', 'carrier_id', 'carrier']);
+            $candidateCountry = strtoupper($this->xmlValue($node, ['country', 'address/country', 'visitor_address/country']));
+            $candidatePostcode = $this->xmlValue($node, ['postcode', 'zip', 'address/postcode', 'visitor_address/postcode']);
+            $candidateAgreement = $this->xmlValue($node, ['transport_agreement/id', 'transport_agreement_id', 'agreement_id']);
+            $candidateProduct = $this->xmlValue($node, ['product/id', 'product_id']);
+
+            if ($carrierId !== '' && $candidateCarrier !== '' && $candidateCarrier !== $carrierId) {
+                continue;
+            }
+
+            if ($country !== '' && $candidateCountry !== '' && $candidateCountry !== $country) {
+                continue;
+            }
+
+            if ($postcode !== '' && $candidatePostcode !== '' && stripos($postcode, $candidatePostcode) !== 0 && stripos($candidatePostcode, $postcode) !== 0) {
+                continue;
+            }
+
+            if ($agreementId !== '' && $candidateAgreement !== '' && $candidateAgreement !== $agreementId) {
+                continue;
+            }
+
+            if ($productId !== '' && $candidateProduct !== '' && $candidateProduct !== $productId) {
+                continue;
+            }
+
+            $id = $this->xmlValue($node, ['number', 'id', 'service_partner_id']);
+            if ($id === '') {
+                continue;
+            }
+
+            $options[] = [
+                'id' => sanitize_text_field($id),
+                'name' => sanitize_text_field($this->xmlValue($node, ['name', 'service_partner_name'])),
+            ];
+        }
+
+        return array_values($options);
+    }
+
+    /**
+     * @param array<string,mixed> $methodConfig
+     * @return array<string,string>
+     */
+    private function resolveCarrierSpecificCustomParams(array $methodConfig): array
+    {
+        $carrier = strtolower((string) ($methodConfig['carrier_name'] ?? ''));
+        $productNeedLocker = $this->productIndicatesLocker($methodConfig);
+
+        if (strpos($carrier, 'bring') !== false) {
+            return ['pickupPointType' => $productNeedLocker ? 'locker' : 'pickup_point'];
+        }
+
+        if (strpos($carrier, 'postnord') !== false) {
+            return ['typeId' => $productNeedLocker ? 'service_point' : 'pickup'];
+        }
+
+        return [];
+    }
+
+    /**
+     * @param array<string,mixed> $methodConfig
+     */
+    private function productIndicatesLocker(array $methodConfig): bool
+    {
+        $productHaystack = strtolower(trim((string) (($methodConfig['product_id'] ?? '') . ' ' . ($methodConfig['product_name'] ?? ''))));
+        if ($productHaystack === '') {
+            return false;
+        }
+
+        return strpos($productHaystack, 'locker') !== false
+            || strpos($productHaystack, 'pakkeautomat') !== false
+            || strpos($productHaystack, 'parcel box') !== false;
+    }
+
+    /**
+     * @param array<string,mixed> $methodConfig
+     */
+    private function resolveSmsServiceId(array $methodConfig): string
+    {
+        $services = isset($methodConfig['services']) && is_array($methodConfig['services']) ? $methodConfig['services'] : [];
+        foreach ($services as $service) {
+            if (!is_array($service)) {
+                continue;
+            }
+
+            $serviceId = sanitize_text_field((string) ($service['service_id'] ?? ''));
+            $serviceName = strtolower(sanitize_text_field((string) ($service['service_name'] ?? '')));
+            if ($serviceId === '') {
+                continue;
+            }
+
+            if (strpos(strtolower($serviceId), 'sms') !== false || strpos($serviceName, 'sms') !== false) {
+                return $serviceId;
+            }
+        }
+
+        return '';
     }
 
     /**
