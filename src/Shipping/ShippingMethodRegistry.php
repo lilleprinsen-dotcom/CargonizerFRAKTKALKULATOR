@@ -456,26 +456,31 @@ final class ShippingMethodRegistry
         $methods = [];
         $instance = 1;
 
-        $agreements = $document->xpath('//transport_agreement');
+        $agreements = $document->xpath('//transport_agreement | //transport-agreement');
         if (!is_array($agreements)) {
             return [];
         }
 
         foreach ($agreements as $agreement) {
-            $agreementId = $this->xmlValue($agreement, ['agreement_id', 'id']);
-            $agreementName = $this->xmlValue($agreement, ['agreement_name', 'name']);
-            $agreementDescription = $this->xmlValue($agreement, ['agreement_description', 'description']);
-            $agreementNumber = $this->xmlValue($agreement, ['agreement_number', 'number']);
+            $agreementId = $this->xmlValue($agreement, ['agreement_id', 'agreement-id', 'identifier', 'id']);
+            $agreementName = $this->xmlValue($agreement, ['agreement_name', 'agreement-name', 'agreement_description', 'agreement-description', 'description', 'name']);
+            $agreementDescription = $this->xmlValue($agreement, ['agreement_description', 'agreement-description', 'description', 'agreement_name', 'agreement-name', 'name']);
+            $agreementNumber = $this->xmlValue($agreement, ['agreement_number', 'agreement-number', 'number']);
 
             $carrierId = $this->xmlValue($agreement, [
                 'carrier/carrier_id',
+                'carrier/carrier-id',
+                'carrier/identifier',
                 'carrier/id',
                 'carrier_id',
+                'carrier-id',
             ]);
             $carrierName = $this->xmlValue($agreement, [
                 'carrier/carrier_name',
+                'carrier/carrier-name',
                 'carrier/name',
                 'carrier_name',
+                'carrier-name',
                 'carrier',
             ]);
 
@@ -488,8 +493,8 @@ final class ShippingMethodRegistry
             }
 
             foreach ($products as $product) {
-                $productId = $this->xmlValue($product, ['product_id', 'id']);
-                $productName = $this->xmlValue($product, ['product_name', 'name']);
+                $productId = $this->xmlValue($product, ['product_id', 'product-id', 'identifier', 'id']);
+                $productName = $this->xmlValue($product, ['product_name', 'product-name', 'name']);
 
                 if ($agreementId === '' || $productId === '') {
                     continue;
@@ -509,8 +514,8 @@ final class ShippingMethodRegistry
                 }
                 if (is_array($serviceNodes)) {
                     foreach ($serviceNodes as $serviceNode) {
-                        $serviceId = $this->xmlValue($serviceNode, ['service_id', 'id']);
-                        $serviceName = $this->xmlValue($serviceNode, ['service_name', 'name']);
+                        $serviceId = $this->xmlValue($serviceNode, ['service_id', 'service-id', 'identifier', 'id']);
+                        $serviceName = $this->xmlValue($serviceNode, ['service_name', 'service-name', 'name']);
                         if ($serviceName !== '' || $serviceId !== '') {
                             $services[] = [
                                 'service_id' => $serviceId,

@@ -105,6 +105,62 @@ XML;
         self::assertSame('Posten - Manuell - Norgespakke', $methods[1]['title']);
     }
 
+
+
+    public function testRefreshFromCargonizerParsesOfficialHyphenatedTransportAgreementXml(): void
+    {
+        $xml = <<<'XML'
+<?xml version="1.0" encoding="UTF-8"?>
+<transport-agreements>
+  <transport-agreement>
+    <identifier>99</identifier>
+    <description>Avtale fra docs</description>
+    <number>AGR-99</number>
+    <carrier>
+      <identifier>301</identifier>
+      <name>PostNord</name>
+    </carrier>
+    <products>
+      <product>
+        <identifier>PROD-1</identifier>
+        <name>Hjemlevering</name>
+        <services>
+          <service>
+            <identifier>SRV-1</identifier>
+            <name>Kvittering</name>
+          </service>
+        </services>
+      </product>
+    </products>
+  </transport-agreement>
+</transport-agreements>
+XML;
+
+        $settings = $this->createMock(SettingsService::class);
+        $settings->method('getSettings')->willReturn(['available_methods' => []]);
+        $settings->expects(self::once())->method('save');
+
+        $client = $this->createMock(CargonizerClient::class);
+        $client->method('fetchTransportAgreements')->willReturn(['raw' => $xml]);
+        $calculator = $this->createMock(RateCalculator::class);
+        $registry = new ShippingMethodRegistry($settings, $client, $client, $calculator);
+
+        $methods = $registry->refreshFromCargonizer();
+
+        self::assertCount(2, $methods);
+        self::assertSame('99|PROD-1', $methods[0]['key']);
+        self::assertSame('99', $methods[0]['agreement_id']);
+        self::assertSame('Avtale fra docs', $methods[0]['agreement_name']);
+        self::assertSame('Avtale fra docs', $methods[0]['agreement_description']);
+        self::assertSame('AGR-99', $methods[0]['agreement_number']);
+        self::assertSame('301', $methods[0]['carrier_id']);
+        self::assertSame('PostNord', $methods[0]['carrier_name']);
+        self::assertSame('PROD-1', $methods[0]['product_id']);
+        self::assertSame('Hjemlevering', $methods[0]['product_name']);
+        self::assertSame([['service_id' => 'SRV-1', 'service_name' => 'Kvittering']], $methods[0]['services']);
+        self::assertSame('manual|norgespakke', $methods[1]['key']);
+    }
+
     public function testResolveAdminEstimateCalculatesManualNorgespakkeAndManualHandlingDebug(): void
     {
         $settings = $this->createMock(SettingsService::class);
