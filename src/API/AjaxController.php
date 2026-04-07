@@ -214,7 +214,6 @@ final class AjaxController
             }
         }
 
-        $jobs = [];
         $preparedMethods = [];
         $methodOverrides = isset($_REQUEST['method_overrides']) ? json_decode(wp_unslash((string) $_REQUEST['method_overrides']), true) : []; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
         $methodOverrides = is_array($methodOverrides) ? $methodOverrides : [];
@@ -231,19 +230,7 @@ final class AjaxController
                 $method['sms_enabled'] = !empty($override['sms_enabled']) ? 'yes' : 'no';
             }
 
-            $jobs[] = [
-                'method' => $method,
-                'package' => $package,
-            ];
             $preparedMethods[] = $method;
-        }
-
-        $jobId = $this->shippingRegistry->enqueueBulkEstimate($jobs);
-        if ($jobId !== null) {
-            wp_send_json_success([
-                'queued' => true,
-                'job_id' => $jobId,
-            ]);
         }
 
         $results = [];
@@ -261,6 +248,8 @@ final class AjaxController
                 continue;
             }
 
+            // Admin popup expects final estimate payload immediately (results + debug),
+            // so bulk runs here stay synchronous even when Action Scheduler is available.
             $result = $this->shippingRegistry->resolveAdminEstimate($method, $package, $recipient);
             $requirements = isset($result['estimate']['requirements']) && is_array($result['estimate']['requirements'])
                 ? $result['estimate']['requirements']
