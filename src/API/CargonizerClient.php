@@ -166,6 +166,58 @@ final class CargonizerClient implements RateProviderInterface
     }
 
     /**
+     * @param array<string,mixed> $recipient
+     * @param array<int,array<string,mixed>> $packages
+     * @param array<string,mixed> $methodConfig
+     * @return array<string,mixed>
+     */
+    public function estimateConsignmentCost(array $recipient, array $packages, array $methodConfig): array
+    {
+        $correlationId = wp_generate_uuid4();
+        $xmlBody = $this->buildConsignmentCostEstimateXml($recipient, $packages, $methodConfig);
+        $response = $this->requestWithRetry(
+            'POST',
+            'consignment_costs',
+            [
+                'headers' => [
+                    'Accept' => 'application/xml',
+                    'Content-Type' => 'application/xml',
+                ],
+                'body' => $xmlBody,
+            ],
+            $correlationId
+        );
+
+        if (is_wp_error($response)) {
+            return [
+                'ok' => false,
+                'method_id' => sanitize_text_field((string) ($methodConfig['method_id'] ?? '')),
+                'correlation_id' => $correlationId,
+                'http_status' => 0,
+                'request_xml' => trim((string) $this->maskSecrets($xmlBody)),
+                'raw_xml' => '',
+                'errors' => [['message' => $response->get_error_message()]],
+                'prices' => [],
+            ];
+        }
+
+        $httpStatus = (int) wp_remote_retrieve_response_code($response);
+        $rawXml = wp_remote_retrieve_body($response);
+        $parsed = $this->parseConsignmentCostEstimateXml(is_string($rawXml) ? $rawXml : '');
+
+        return [
+            'ok' => $httpStatus >= 200 && $httpStatus < 300 && $parsed['errors'] === [],
+            'method_id' => sanitize_text_field((string) ($methodConfig['method_id'] ?? '')),
+            'correlation_id' => $correlationId,
+            'http_status' => $httpStatus,
+            'request_xml' => trim((string) $this->maskSecrets($xmlBody)),
+            'raw_xml' => is_string($rawXml) ? trim((string) $this->maskSecrets($rawXml)) : '',
+            'errors' => $parsed['errors'],
+            'prices' => $parsed['prices'],
+        ];
+    }
+
+    /**
      * @return array<string,mixed>
      */
     public function testConnection(): array
@@ -294,6 +346,7 @@ final class CargonizerClient implements RateProviderInterface
             'transport_agreements' => rtrim($baseUrl, '/') . '/transport_agreements.xml',
             'service_partners' => rtrim($baseUrl, '/') . '/service_partners.xml',
             'rate_quote' => (string) ($settings['rate_api_url'] ?? ''),
+            'consignment_costs' => rtrim($baseUrl, '/') . '/consignment_costs.xml',
         ];
 
         $resolved = (string) ($map[$endpointKey] ?? '');
@@ -408,6 +461,134 @@ final class CargonizerClient implements RateProviderInterface
             'delivery_estimate' => sanitize_text_field((string) ($decoded['delivery_estimate'] ?? '')),
             'raw' => $decoded,
         ];
+    }
+
+    /**
+     * @param array<string,mixed> $recipient
+     * @param array<int,array<string,mixed>> $packages
+     * @param array<string,mixed> $methodConfig
+     */
+    private function buildConsignmentCostEstimateXml(array $recipient, array $packages, array $methodConfig): string
+    {
+        $xml = [];
+        $xml[] = '<?xml version="1.0" encoding="UTF-8"?>';
+        $xml[] = '<consignment>';
+        $xml[] = '<transport_agreement><id>' . $this->xmlEscape((string) ($methodConfig['agreement_id'] ?? '')) . '</id></transport_agreement>';
+        $xml[] = '<product><id>' . $this->xmlEscape((string) ($methodConfig['product_id'] ?? '')) . '</id></product>';
+        $xml[] = '<recipient>';
+        $xml[] = '<name>' . $this->xmlEscape((string) ($recipient['name'] ?? '')) . '</name>';
+        $xml[] = '<address1>' . $this->xmlEscape((string) ($recipient['address1'] ?? '')) . '</address1>';
+        $xml[] = '<address2>' . $this->xmlEscape((string) ($recipient['address2'] ?? '')) . '</address2>';
+        $xml[] = '<postcode>' . $this->xmlEscape((string) ($recipient['postcode'] ?? '')) . '</postcode>';
+        $xml[] = '<city>' . $this->xmlEscape((string) ($recipient['city'] ?? '')) . '</city>';
+        $xml[] = '<country>' . $this->xmlEscape((string) ($recipient['country'] ?? '')) . '</country>';
+        $xml[] = '</recipient>';
+        $xml[] = '<packages>';
+
+        foreach ($packages as $package) {
+            if (!is_array($package)) {
+                continue;
+            }
+
+            $xml[] = '<package>';
+            $xml[] = '<weight>' . $this->xmlEscape((string) max(0.0, (float) ($package['weight'] ?? 0))) . '</weight>';
+            $xml[] = '<length>' . $this->xmlEscape((string) max(0.0, (float) ($package['length'] ?? 0))) . '</length>';
+            $xml[] = '<width>' . $this->xmlEscape((string) max(0.0, (float) ($package['width'] ?? 0))) . '</width>';
+            $xml[] = '<height>' . $this->xmlEscape((string) max(0.0, (float) ($package['height'] ?? 0))) . '</height>';
+            $xml[] = '<description>' . $this->xmlEscape((string) ($package['description'] ?? '')) . '</description>';
+            $xml[] = '</package>';
+        }
+
+        $xml[] = '</packages>';
+        $xml[] = '</consignment>';
+
+        return implode('', $xml);
+    }
+
+    /**
+     * @return array{errors:array<int,array<string,string>>,prices:array<string,float|null>}
+     */
+    private function parseConsignmentCostEstimateXml(string $xml): array
+    {
+        if (!function_exists('simplexml_load_string')) {
+            return [
+                'errors' => [['message' => 'XML parser is unavailable on this host.']],
+                'prices' => [],
+            ];
+        }
+
+        $trimmed = trim($xml);
+        if ($trimmed === '') {
+            return [
+                'errors' => [['message' => 'Empty XML response from Cargonizer.']],
+                'prices' => [],
+            ];
+        }
+
+        $document = @simplexml_load_string($trimmed);
+        if ($document === false) {
+            return [
+                'errors' => [['message' => 'Could not parse XML response from Cargonizer.']],
+                'prices' => [],
+            ];
+        }
+
+        $errors = [];
+        $errorNodes = $document->xpath('//error');
+        if (is_array($errorNodes)) {
+            foreach ($errorNodes as $errorNode) {
+                if (!$errorNode instanceof \SimpleXMLElement) {
+                    continue;
+                }
+
+                $errors[] = [
+                    'code' => sanitize_text_field((string) ($errorNode->code ?? '')),
+                    'field' => sanitize_text_field((string) ($errorNode->field ?? '')),
+                    'message' => sanitize_text_field((string) ($errorNode->message ?? (string) $errorNode)),
+                ];
+            }
+        }
+
+        return [
+            'errors' => $errors,
+            'prices' => [
+                'estimated_cost' => $this->xmlNodeFloat($document, ['//estimated_cost']),
+                'gross_amount' => $this->xmlNodeFloat($document, ['//gross_amount']),
+                'net_amount' => $this->xmlNodeFloat($document, ['//net_amount']),
+                'price' => $this->xmlNodeFloat($document, ['//price', '//amount']),
+                'total' => $this->xmlNodeFloat($document, ['//total', '//total_amount']),
+            ],
+        ];
+    }
+
+    private function xmlEscape(string $value): string
+    {
+        return htmlspecialchars($value, ENT_XML1 | ENT_QUOTES, 'UTF-8');
+    }
+
+    /**
+     * @param array<int,string> $paths
+     */
+    private function xmlNodeFloat(\SimpleXMLElement $document, array $paths): ?float
+    {
+        foreach ($paths as $path) {
+            $nodes = $document->xpath($path);
+            if (!is_array($nodes) || !isset($nodes[0])) {
+                continue;
+            }
+
+            $raw = trim((string) $nodes[0]);
+            if ($raw === '') {
+                continue;
+            }
+
+            $normalized = str_replace(',', '.', $raw);
+            if (is_numeric($normalized)) {
+                return (float) $normalized;
+            }
+        }
+
+        return null;
     }
 
     private function isCircuitOpen(string $endpoint): bool

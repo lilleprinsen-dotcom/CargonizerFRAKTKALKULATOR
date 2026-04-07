@@ -226,6 +226,44 @@ final class ShippingMethodRegistry
     }
 
     /**
+     * @param array<string,mixed> $methodConfig
+     * @param array<string,mixed> $package
+     * @param array<string,mixed> $recipient
+     * @return array<string,mixed>
+     */
+    public function resolveAdminEstimate(array $methodConfig, array $package, array $recipient): array
+    {
+        $methodId = (string) ($methodConfig['method_id'] ?? '');
+        $fallbackRate = $this->getFallbackRate($methodConfig);
+        $result = $this->client->estimateConsignmentCost(
+            $recipient,
+            $this->extractPackagesFromPackageInput($package),
+            $methodConfig
+        );
+
+        $prices = is_array($result['prices'] ?? null) ? $result['prices'] : [];
+        $baseRate = $this->pickAdminEstimateBaseRate($methodConfig, $prices, $fallbackRate);
+        $quoteRequest = new RateQuoteRequest(
+            (string) ($methodConfig['agreement_id'] ?? ''),
+            (string) ($methodConfig['product_id'] ?? ''),
+            $this->compactPackage($package)
+        );
+
+        $computedRate = $baseRate !== null
+            ? $this->validateRate($this->rateCalculator->calculate($baseRate, $this->settings->getPricingModifiers(), $quoteRequest))
+            : null;
+
+        return [
+            'method_id' => $methodId,
+            'title' => (string) ($methodConfig['title'] ?? $methodId),
+            'rate' => $computedRate,
+            'price_source' => $this->getMethodPriceSource($methodConfig),
+            'fallback_rate' => $fallbackRate,
+            'estimate' => $result,
+        ];
+    }
+
+    /**
      * @return array<int,array<string,mixed>>
      */
     private function extractMethodsFromXml(string $xml, array $existingMethods = []): array
@@ -470,5 +508,82 @@ final class ShippingMethodRegistry
         }
 
         return round($rate, 2);
+    }
+
+    /**
+     * @param array<string,mixed> $methodConfig
+     */
+    private function getMethodPriceSource(array $methodConfig): string
+    {
+        $settings = $this->settings->getSettings();
+        $methodPricing = is_array($settings['method_pricing'] ?? null) ? $settings['method_pricing'] : [];
+        $methodId = sanitize_key((string) ($methodConfig['method_id'] ?? ''));
+        $configured = is_array($methodPricing[$methodId] ?? null) ? $methodPricing[$methodId] : [];
+
+        return sanitize_key((string) ($configured['price_source'] ?? 'estimated'));
+    }
+
+    /**
+     * @param array<string,mixed> $methodConfig
+     * @param array<string,mixed> $prices
+     */
+    private function pickAdminEstimateBaseRate(array $methodConfig, array $prices, ?float $fallbackRate): ?float
+    {
+        $priceSource = $this->getMethodPriceSource($methodConfig);
+        $candidates = [
+            'estimated' => $prices['estimated_cost'] ?? null,
+            'gross' => $prices['gross_amount'] ?? null,
+            'net' => $prices['net_amount'] ?? null,
+            'fallback' => $fallbackRate,
+            'manual_norgespakke' => $fallbackRate,
+        ];
+
+        $primary = $candidates[$priceSource] ?? null;
+        if (is_numeric($primary)) {
+            return (float) $primary;
+        }
+
+        foreach (['estimated_cost', 'gross_amount', 'net_amount', 'price', 'total'] as $key) {
+            if (isset($prices[$key]) && is_numeric($prices[$key])) {
+                return (float) $prices[$key];
+            }
+        }
+
+        return $fallbackRate;
+    }
+
+    /**
+     * @param array<string,mixed> $package
+     * @return array<int,array<string,mixed>>
+     */
+    private function extractPackagesFromPackageInput(array $package): array
+    {
+        $colli = isset($package['colli']) && is_array($package['colli']) ? $package['colli'] : [];
+        $normalized = [];
+        foreach ($colli as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+
+            $normalized[] = [
+                'description' => sanitize_text_field((string) ($item['description'] ?? 'Pakke')),
+                'length' => (float) ($item['length'] ?? 0),
+                'width' => (float) ($item['width'] ?? 0),
+                'height' => (float) ($item['height'] ?? 0),
+                'weight' => (float) ($item['weight'] ?? 0),
+            ];
+        }
+
+        if ($normalized !== []) {
+            return $normalized;
+        }
+
+        return [[
+            'description' => 'Pakke',
+            'length' => 10.0,
+            'width' => 10.0,
+            'height' => 10.0,
+            'weight' => max(0.01, (float) ($package['weight'] ?? 0.01)),
+        ]];
     }
 }
