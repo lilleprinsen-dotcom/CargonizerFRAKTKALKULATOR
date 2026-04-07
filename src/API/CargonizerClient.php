@@ -514,15 +514,30 @@ final class CargonizerClient implements RateProviderInterface
      */
     private function buildConsignmentCostEstimateXml(array $recipient, array $packages, array $methodConfig, array $estimateOptions = []): string
     {
+        $agreementId = sanitize_text_field((string) ($methodConfig['agreement_id'] ?? ''));
+        $productId = sanitize_text_field((string) ($methodConfig['product_id'] ?? ''));
+        $servicePartner = sanitize_text_field((string) ($estimateOptions['service_partner'] ?? ''));
+
         $xml = [];
         $xml[] = '<?xml version="1.0" encoding="UTF-8"?>';
-        $xml[] = '<consignment>';
-        $xml[] = '<transport_agreement><id>' . $this->xmlEscape((string) ($methodConfig['agreement_id'] ?? '')) . '</id></transport_agreement>';
-        $xml[] = '<product><id>' . $this->xmlEscape((string) ($methodConfig['product_id'] ?? '')) . '</id></product>';
-        $servicePartner = sanitize_text_field((string) ($estimateOptions['service_partner'] ?? ''));
+        $xml[] = '<consignments>';
+        $xml[] = '<consignment transport_agreement="' . $this->xmlEscape($agreementId) . '">';
+        $xml[] = '<product>' . $this->xmlEscape($productId) . '</product>';
+        $xml[] = '<parts>';
+        $xml[] = '<consignee>';
+        $xml[] = '<name>' . $this->xmlEscape((string) ($recipient['name'] ?? '')) . '</name>';
+        $xml[] = '<address1>' . $this->xmlEscape((string) ($recipient['address1'] ?? '')) . '</address1>';
+        $xml[] = '<address2>' . $this->xmlEscape((string) ($recipient['address2'] ?? '')) . '</address2>';
+        $xml[] = '<postcode>' . $this->xmlEscape((string) ($recipient['postcode'] ?? '')) . '</postcode>';
+        $xml[] = '<city>' . $this->xmlEscape((string) ($recipient['city'] ?? '')) . '</city>';
+        $xml[] = '<country>' . $this->xmlEscape((string) ($recipient['country'] ?? '')) . '</country>';
+        $xml[] = '</consignee>';
+
         if ($servicePartner !== '') {
             $xml[] = '<service_partner><number>' . $this->xmlEscape($servicePartner) . '</number></service_partner>';
         }
+
+        $xml[] = '</parts>';
 
         $services = isset($estimateOptions['services']) && is_array($estimateOptions['services']) ? $estimateOptions['services'] : [];
         if ($services !== []) {
@@ -547,6 +562,23 @@ final class CargonizerClient implements RateProviderInterface
             $xml[] = '</services>';
         }
 
+        $xml[] = '<items>';
+        foreach ($packages as $package) {
+            if (!is_array($package)) {
+                continue;
+            }
+
+            $weight = max(0.0, (float) ($package['weight'] ?? 0));
+            $length = max(0.0, (float) ($package['length'] ?? 0));
+            $width = max(0.0, (float) ($package['width'] ?? 0));
+            $height = max(0.0, (float) ($package['height'] ?? 0));
+            $volumeDm3 = ($length * $width * $height) / 1000;
+            $description = sanitize_text_field((string) ($package['description'] ?? ''));
+
+            $xml[] = '<item type="package" amount="1" weight="' . $this->xmlEscape((string) $weight) . '" volume="' . $this->xmlEscape((string) $volumeDm3) . '" description="' . $this->xmlEscape($description) . '"/>';
+        }
+        $xml[] = '</items>';
+
         $customParams = isset($estimateOptions['custom_params']) && is_array($estimateOptions['custom_params']) ? $estimateOptions['custom_params'] : [];
         if ($customParams !== []) {
             $xml[] = '<customs>';
@@ -565,32 +597,8 @@ final class CargonizerClient implements RateProviderInterface
             $xml[] = '</customs>';
         }
 
-        $xml[] = '<recipient>';
-        $xml[] = '<name>' . $this->xmlEscape((string) ($recipient['name'] ?? '')) . '</name>';
-        $xml[] = '<address1>' . $this->xmlEscape((string) ($recipient['address1'] ?? '')) . '</address1>';
-        $xml[] = '<address2>' . $this->xmlEscape((string) ($recipient['address2'] ?? '')) . '</address2>';
-        $xml[] = '<postcode>' . $this->xmlEscape((string) ($recipient['postcode'] ?? '')) . '</postcode>';
-        $xml[] = '<city>' . $this->xmlEscape((string) ($recipient['city'] ?? '')) . '</city>';
-        $xml[] = '<country>' . $this->xmlEscape((string) ($recipient['country'] ?? '')) . '</country>';
-        $xml[] = '</recipient>';
-        $xml[] = '<packages>';
-
-        foreach ($packages as $package) {
-            if (!is_array($package)) {
-                continue;
-            }
-
-            $xml[] = '<package>';
-            $xml[] = '<weight>' . $this->xmlEscape((string) max(0.0, (float) ($package['weight'] ?? 0))) . '</weight>';
-            $xml[] = '<length>' . $this->xmlEscape((string) max(0.0, (float) ($package['length'] ?? 0))) . '</length>';
-            $xml[] = '<width>' . $this->xmlEscape((string) max(0.0, (float) ($package['width'] ?? 0))) . '</width>';
-            $xml[] = '<height>' . $this->xmlEscape((string) max(0.0, (float) ($package['height'] ?? 0))) . '</height>';
-            $xml[] = '<description>' . $this->xmlEscape((string) ($package['description'] ?? '')) . '</description>';
-            $xml[] = '</package>';
-        }
-
-        $xml[] = '</packages>';
         $xml[] = '</consignment>';
+        $xml[] = '</consignments>';
 
         return implode('', $xml);
     }
@@ -665,9 +673,9 @@ final class CargonizerClient implements RateProviderInterface
         return [
             'errors' => $errors,
             'prices' => [
-                'estimated_cost' => $this->xmlNodeFloat($document, ['//estimated_cost']),
-                'gross_amount' => $this->xmlNodeFloat($document, ['//gross_amount']),
-                'net_amount' => $this->xmlNodeFloat($document, ['//net_amount']),
+                'estimated_cost' => $this->xmlNodeFloat($document, ['//estimated_cost', '//estimated-cost']),
+                'gross_amount' => $this->xmlNodeFloat($document, ['//gross_amount', '//gross-amount']),
+                'net_amount' => $this->xmlNodeFloat($document, ['//net_amount', '//net-amount']),
                 'price' => $this->xmlNodeFloat($document, ['//price', '//amount']),
                 'total' => $this->xmlNodeFloat($document, ['//total', '//total_amount']),
             ],
