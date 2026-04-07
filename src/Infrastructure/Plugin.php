@@ -39,7 +39,7 @@ final class Plugin
         $this->container->set(SettingsService::class, fn (ServiceContainer $c): SettingsService => new SettingsService($c->get(SettingsRepository::class)));
         $this->container->set(CargonizerClient::class, fn (ServiceContainer $c): CargonizerClient => new CargonizerClient($c->get(SettingsService::class)));
         $this->container->set(RateCalculator::class, fn (): RateCalculator => new RateCalculator());
-        $this->container->set(ShippingMethodRegistry::class, fn (ServiceContainer $c): ShippingMethodRegistry => new ShippingMethodRegistry($c->get(SettingsService::class), $c->get(CargonizerClient::class), $c->get(RateCalculator::class)));
+        $this->container->set(ShippingMethodRegistry::class, fn (ServiceContainer $c): ShippingMethodRegistry => new ShippingMethodRegistry($c->get(SettingsService::class), $c->get(CargonizerClient::class), $c->get(CargonizerClient::class), $c->get(RateCalculator::class)));
         $this->container->set(WooShippingIntegration::class, fn (ServiceContainer $c): WooShippingIntegration => new WooShippingIntegration($c->get(ShippingMethodRegistry::class)));
         $this->container->set(CompatibilityBridge::class, fn (): CompatibilityBridge => new CompatibilityBridge());
         $this->container->set(WooCommerceVersionGuard::class, fn (): WooCommerceVersionGuard => new WooCommerceVersionGuard());

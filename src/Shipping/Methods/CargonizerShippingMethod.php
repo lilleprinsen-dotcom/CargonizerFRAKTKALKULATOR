@@ -60,11 +60,18 @@ class CargonizerShippingMethod extends \WC_Shipping_Method
             return;
         }
 
-        $this->add_rate([
+        $rateDefinition = [
             'id' => $this->id . ':' . $this->instance_id,
             'label' => (string) ($this->get_option('title', $methodConfig['title'] ?? $this->title)),
             'cost' => $rate,
             'package' => $package,
-        ]);
+        ];
+
+        /** @var array<string,mixed> $rateDefinition */
+        $rateDefinition = apply_filters('lp_cargonizer_before_rate_publish', $rateDefinition, $methodConfig, $package, $this);
+
+        do_action('lp_cargonizer_before_rate_publish_action', $rateDefinition, $methodConfig, $package, $this);
+
+        $this->add_rate($rateDefinition);
     }
 }
