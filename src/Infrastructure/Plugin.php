@@ -5,6 +5,7 @@ namespace Lilleprinsen\Cargonizer\Infrastructure;
 use Lilleprinsen\Cargonizer\Admin\AdminOrderController;
 use Lilleprinsen\Cargonizer\Admin\AdminPagesController;
 use Lilleprinsen\Cargonizer\API\AjaxController;
+use Lilleprinsen\Cargonizer\API\CargonizerClient;
 use Lilleprinsen\Cargonizer\API\RestController;
 use Lilleprinsen\Cargonizer\Checkout\CheckoutService;
 use Lilleprinsen\Cargonizer\Compatibility\CheckoutHookAdapter;
@@ -44,7 +45,7 @@ final class Plugin
         $this->container->set(WooCommerceVersionGuard::class, fn (): WooCommerceVersionGuard => new WooCommerceVersionGuard());
         $this->container->set(CheckoutService::class, fn (): CheckoutService => new CheckoutService());
         $this->container->set(CheckoutHookAdapter::class, fn (ServiceContainer $c): CheckoutHookAdapter => new CheckoutHookAdapter($c->get(CheckoutService::class)));
-        $this->container->set(AdminPagesController::class, fn (ServiceContainer $c): AdminPagesController => new AdminPagesController($c->get(SettingsService::class), $c->get(ShippingMethodRegistry::class)));
+        $this->container->set(AdminPagesController::class, fn (ServiceContainer $c): AdminPagesController => new AdminPagesController($c->get(SettingsService::class), $c->get(ShippingMethodRegistry::class), $c->get(CargonizerClient::class)));
         $this->container->set(AdminOrderController::class, fn (): AdminOrderController => new AdminOrderController());
         $this->container->set(OrderHooksAdapter::class, fn (ServiceContainer $c): OrderHooksAdapter => new OrderHooksAdapter($c->get(AdminOrderController::class)));
         $this->container->set(AjaxController::class, fn (ServiceContainer $c): AjaxController => new AjaxController($c->get(ShippingMethodRegistry::class)));
