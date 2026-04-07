@@ -22,4 +22,20 @@ final class SettingsServiceTest extends TestCase
         self::assertSame(['badkey' => 0.0, 'ok' => 12.5], $clean['fallback_rates']);
         self::assertSame(4, $clean['rounding_precision']);
     }
+
+    public function testSanitizeSettingsKeepsExistingSecretsWhenBlank(): void
+    {
+        $service = new SettingsService(new SettingsRepository());
+
+        $clean = $service->sanitizeSettings([
+            'api_key' => '',
+            'sender_id' => '',
+        ], [
+            'api_key' => 'enc:v1:abc',
+            'sender_id' => 'enc:v1:def',
+        ]);
+
+        self::assertSame('enc:v1:abc', $clean['api_key']);
+        self::assertSame('enc:v1:def', $clean['sender_id']);
+    }
 }
