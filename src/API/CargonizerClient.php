@@ -57,20 +57,26 @@ final class CargonizerClient implements RateProviderInterface
         return $this->requestMemo[$cacheKey] = $normalized;
     }
 
-    public function fetchServicePartners(): array
+    /**
+     * @param array<string,string> $query
+     * @return array<string,mixed>
+     */
+    public function fetchServicePartners(array $query = []): array
     {
-        $cacheKey = 'service_partners';
+        ksort($query);
+        $cacheKey = 'service_partners:' . md5(wp_json_encode($query));
         $memoized = $this->requestMemo[$cacheKey] ?? null;
         if (is_array($memoized)) {
             return $memoized;
         }
 
-        $cached = $this->getCachedPayload('lp_carg_service_partners');
+        $cachedPayloadKey = 'lp_carg_service_partners_' . md5(wp_json_encode($query));
+        $cached = $this->getCachedPayload($cachedPayloadKey);
         if (is_array($cached)) {
             return $this->requestMemo[$cacheKey] = $cached;
         }
 
-        $response = $this->requestWithRetry('GET', 'service_partners', [], wp_generate_uuid4());
+        $response = $this->requestWithRetry('GET', 'service_partners', ['query' => $query], wp_generate_uuid4());
         if (is_wp_error($response)) {
             return [];
         }
@@ -80,7 +86,7 @@ final class CargonizerClient implements RateProviderInterface
             return [];
         }
 
-        $this->setCachedPayload('lp_carg_service_partners', $normalized, 10 * MINUTE_IN_SECONDS);
+        $this->setCachedPayload($cachedPayloadKey, $normalized, 10 * MINUTE_IN_SECONDS);
 
         return $this->requestMemo[$cacheKey] = $normalized;
     }
@@ -281,6 +287,12 @@ final class CargonizerClient implements RateProviderInterface
         $endpoint = $this->resolveEndpoint($endpointKey);
         if ($endpoint === null) {
             return new \WP_Error('lp_cargonizer_endpoint_missing', 'Cargonizer endpoint is not configured.');
+        }
+
+        $query = isset($args['query']) && is_array($args['query']) ? $args['query'] : [];
+        unset($args['query']);
+        if (!empty($query)) {
+            $endpoint = add_query_arg($query, $endpoint);
         }
 
         $authHeaders = $this->buildAuthHeaders();
