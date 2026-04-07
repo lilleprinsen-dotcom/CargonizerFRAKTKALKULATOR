@@ -249,7 +249,9 @@ final class CargonizerClient implements RateProviderInterface
             'ok' => $status >= 200 && $status < 300,
             'message' => $status >= 200 && $status < 300
                 ? 'Connection successful.'
-                : ($errorMessage !== '' ? sprintf('Connection failed: %s', $errorMessage) : 'Connection failed.'),
+                : ($status === 401
+                    ? 'Connection failed: Authentication rejected. Verify API key and sender/user relation ID from Cargonizer Preferences.'
+                    : ($errorMessage !== '' ? sprintf('Connection failed: %s', $errorMessage) : 'Connection failed.')),
             'correlation_id' => $correlationId,
             'status' => $status,
             'raw_xml' => is_string($rawXml) ? trim((string) $this->maskSecrets($rawXml)) : '',

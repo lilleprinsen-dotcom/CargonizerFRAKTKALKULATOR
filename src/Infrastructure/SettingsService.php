@@ -19,12 +19,12 @@ final class SettingsService
 
     public function getApiKey(): string
     {
-        return $this->decryptSecret((string) ($this->getSettings()['api_key'] ?? ''));
+        return $this->normalizeApiKey($this->decryptSecret((string) ($this->getSettings()['api_key'] ?? '')));
     }
 
     public function getSenderId(): string
     {
-        return $this->decryptSecret((string) ($this->getSettings()['sender_id'] ?? ''));
+        return $this->normalizeSenderId($this->decryptSecret((string) ($this->getSettings()['sender_id'] ?? '')));
     }
 
     public function getPricingModifiers(): array
@@ -74,8 +74,8 @@ final class SettingsService
 
     public function sanitizeSettings(array $settings, array $existing = []): array
     {
-        $apiKeyRaw = sanitize_text_field((string) ($settings['api_key'] ?? ''));
-        $senderRaw = sanitize_text_field((string) ($settings['sender_id'] ?? ''));
+        $apiKeyRaw = $this->normalizeApiKey(sanitize_text_field((string) ($settings['api_key'] ?? '')));
+        $senderRaw = $this->normalizeSenderId(sanitize_text_field((string) ($settings['sender_id'] ?? '')));
 
         return [
             'api_key' => $this->normalizeSecret($apiKeyRaw, (string) ($existing['api_key'] ?? '')),
@@ -362,6 +362,16 @@ final class SettingsService
     private function canEncrypt(): bool
     {
         return function_exists('openssl_encrypt') && function_exists('openssl_decrypt') && function_exists('wp_salt');
+    }
+
+    private function normalizeApiKey(string $apiKey): string
+    {
+        return trim(preg_replace('/\s+/', '', $apiKey) ?? '');
+    }
+
+    private function normalizeSenderId(string $senderId): string
+    {
+        return preg_replace('/\D+/', '', trim($senderId)) ?? '';
     }
 
     private function encryptionKey(): string
