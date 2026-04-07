@@ -147,6 +147,7 @@ final class SettingsService
             $clean[] = [
                 'instance_id' => max(1, (int) ($method['instance_id'] ?? 0)),
                 'method_id' => $methodId,
+                'key' => sanitize_text_field((string) ($method['key'] ?? '')),
                 'carrier_name' => sanitize_text_field((string) ($method['carrier_name'] ?? '')),
                 'carrier_id' => sanitize_text_field((string) ($method['carrier_id'] ?? '')),
                 'agreement_id' => sanitize_text_field((string) ($method['agreement_id'] ?? '')),
@@ -157,6 +158,7 @@ final class SettingsService
                 'product_name' => sanitize_text_field((string) ($method['product_name'] ?? '')),
                 'services' => $this->sanitizeServices($method['services'] ?? []),
                 'title' => sanitize_text_field((string) ($method['title'] ?? '')),
+                'is_manual' => !empty($method['is_manual']),
                 'enabled' => (string) ($method['enabled'] ?? '') === 'no' ? 'no' : 'yes',
                 'fallback_rate' => max(0.0, $this->toFloat($method['fallback_rate'] ?? 0)),
             ];
@@ -236,7 +238,7 @@ final class SettingsService
 
     /**
      * @param mixed $services
-     * @return array<int,string>
+     * @return array<int,array{service_id:string,service_name:string}>
      */
     private function sanitizeServices($services): array
     {
@@ -246,13 +248,29 @@ final class SettingsService
 
         $clean = [];
         foreach ($services as $service) {
-            $name = sanitize_text_field((string) $service);
-            if ($name !== '') {
-                $clean[] = $name;
+            if (is_array($service)) {
+                $serviceId = sanitize_text_field((string) ($service['service_id'] ?? ''));
+                $serviceName = sanitize_text_field((string) ($service['service_name'] ?? ''));
+            } else {
+                $serviceId = '';
+                $serviceName = sanitize_text_field((string) $service);
+            }
+
+            if ($serviceId !== '' || $serviceName !== '') {
+                $clean[] = [
+                    'service_id' => $serviceId,
+                    'service_name' => $serviceName,
+                ];
             }
         }
 
-        return array_values(array_unique($clean));
+        $unique = [];
+        foreach ($clean as $service) {
+            $fingerprint = $service['service_id'] . '|' . $service['service_name'];
+            $unique[$fingerprint] = $service;
+        }
+
+        return array_values($unique);
     }
 
     private function normalizeSecret(string $rawInput, string $existingEncrypted): string

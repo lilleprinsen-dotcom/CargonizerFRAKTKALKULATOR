@@ -248,39 +248,60 @@ final class ShippingMethodRegistry
         }
 
         foreach ($agreements as $agreement) {
-            $agreementId = trim((string) ($agreement->id ?? ''));
-            $agreementName = trim((string) ($agreement->name ?? ''));
-            $products = $agreement->xpath('.//product');
+            $agreementId = $this->xmlValue($agreement, ['agreement_id', 'id']);
+            $agreementName = $this->xmlValue($agreement, ['agreement_name', 'name']);
+            $agreementDescription = $this->xmlValue($agreement, ['agreement_description', 'description']);
+            $agreementNumber = $this->xmlValue($agreement, ['agreement_number', 'number']);
+
+            $carrierId = $this->xmlValue($agreement, [
+                'carrier/carrier_id',
+                'carrier/id',
+                'carrier_id',
+            ]);
+            $carrierName = $this->xmlValue($agreement, [
+                'carrier/carrier_name',
+                'carrier/name',
+                'carrier_name',
+                'carrier',
+            ]);
+
+            $products = $agreement->xpath('./products/product');
+            if (!is_array($products) || $products === []) {
+                $products = $agreement->xpath('.//product');
+            }
             if (!is_array($products)) {
                 continue;
             }
 
             foreach ($products as $product) {
-                $productId = trim((string) ($product->id ?? ''));
-                $productName = trim((string) ($product->name ?? ''));
+                $productId = $this->xmlValue($product, ['product_id', 'id']);
+                $productName = $this->xmlValue($product, ['product_name', 'name']);
 
                 if ($agreementId === '' || $productId === '') {
                     continue;
                 }
 
-                $methodId = sprintf('lp_cargonizer_%s_%s', sanitize_key($agreementId), sanitize_key($productId));
-                $title = trim($agreementName . ' - ' . $productName);
+                $methodKey = $agreementId . '|' . $productId;
+                $methodId = sprintf('lp_cargonizer_%s', sanitize_key($methodKey));
+                $title = trim($carrierName . ' - ' . $agreementName . ' - ' . $productName, ' -');
                 if ($title === '') {
                     $title = sprintf('Cargonizer %s/%s', $agreementId, $productId);
                 }
                 $existing = $this->findMethodById($methodId, $existingMethods);
-
-                $carrierName = trim((string) ($agreement->carrier ?? ''));
-                $carrierId = trim((string) ($agreement->carrier_id ?? ''));
-                $agreementDescription = trim((string) ($agreement->description ?? ''));
-                $agreementNumber = trim((string) ($agreement->number ?? ''));
                 $services = [];
-                $serviceNodes = $product->xpath('.//service');
+                $serviceNodes = $product->xpath('./services/service');
+                if (!is_array($serviceNodes) || $serviceNodes === []) {
+                    $serviceNodes = $product->xpath('.//service');
+                }
                 if (is_array($serviceNodes)) {
                     foreach ($serviceNodes as $serviceNode) {
-                        $serviceName = trim((string) ($serviceNode->name ?? $serviceNode));
-                        if ($serviceName !== '') {
-                            $services[] = $serviceName;
+                        $serviceId = $this->xmlValue($serviceNode, ['service_id', 'id']);
+                        $serviceName = $this->xmlValue($serviceNode, ['service_name', 'name']);
+                        if ($serviceName !== '' || $serviceId !== '') {
+                            $services[] = [
+                                'service_id' => $serviceId,
+                                'service_name' => $serviceName,
+                            ];
                         }
                     }
                 }
@@ -288,6 +309,7 @@ final class ShippingMethodRegistry
                 $methods[] = [
                     'instance_id' => $instance,
                     'method_id' => $methodId,
+                    'key' => $methodKey,
                     'carrier_name' => $carrierName,
                     'carrier_id' => $carrierId,
                     'agreement_id' => $agreementId,
@@ -296,8 +318,9 @@ final class ShippingMethodRegistry
                     'agreement_number' => $agreementNumber,
                     'product_id' => $productId,
                     'product_name' => $productName,
-                    'services' => array_values(array_unique($services)),
+                    'services' => $services,
                     'title' => $title,
+                    'is_manual' => false,
                     'enabled' => (string) ($existing['enabled'] ?? 'yes') === 'no' ? 'no' : 'yes',
                     'fallback_rate' => isset($existing['fallback_rate']) && is_numeric($existing['fallback_rate']) ? (float) $existing['fallback_rate'] : 0,
                 ];
@@ -306,7 +329,48 @@ final class ShippingMethodRegistry
             }
         }
 
+        $manualMethodId = sprintf('lp_cargonizer_%s', sanitize_key('manual|norgespakke'));
+        $manualExisting = $this->findMethodById($manualMethodId, $existingMethods);
+        $methods[] = [
+            'instance_id' => $instance,
+            'method_id' => $manualMethodId,
+            'key' => 'manual|norgespakke',
+            'carrier_name' => 'Posten',
+            'carrier_id' => 'manual',
+            'agreement_id' => 'manual',
+            'agreement_name' => 'Manuell',
+            'agreement_description' => 'Synthetic manual method',
+            'agreement_number' => 'manual',
+            'product_id' => 'norgespakke',
+            'product_name' => 'Norgespakke',
+            'services' => [],
+            'title' => 'Posten - Manuell - Norgespakke',
+            'is_manual' => true,
+            'enabled' => (string) ($manualExisting['enabled'] ?? 'yes') === 'no' ? 'no' : 'yes',
+            'fallback_rate' => isset($manualExisting['fallback_rate']) && is_numeric($manualExisting['fallback_rate']) ? (float) $manualExisting['fallback_rate'] : 0,
+        ];
+
         return $methods;
+    }
+
+    private function xmlValue(\SimpleXMLElement $node, array $paths): string
+    {
+        foreach ($paths as $path) {
+            $value = trim((string) ($node->{$path} ?? ''));
+            if ($value !== '') {
+                return $value;
+            }
+
+            $matches = $node->xpath('./' . $path);
+            if (is_array($matches) && isset($matches[0])) {
+                $matchValue = trim((string) $matches[0]);
+                if ($matchValue !== '') {
+                    return $matchValue;
+                }
+            }
+        }
+
+        return '';
     }
 
     /**
