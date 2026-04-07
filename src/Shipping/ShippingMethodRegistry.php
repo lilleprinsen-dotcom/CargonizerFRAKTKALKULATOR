@@ -735,15 +735,32 @@ final class ShippingMethodRegistry
     private function parseEstimatePriceFields(array $prices, ?float $fallbackRate, ?float $manualNorgespakkePrice): array
     {
         $parsed = [];
-        $parsed['estimated'] = isset($prices['estimated_cost']) && is_numeric($prices['estimated_cost']) ? (float) $prices['estimated_cost'] : null;
-        $parsed['gross'] = isset($prices['gross_amount']) && is_numeric($prices['gross_amount']) ? (float) $prices['gross_amount'] : null;
-        $parsed['net'] = isset($prices['net_amount']) && is_numeric($prices['net_amount']) ? (float) $prices['net_amount'] : null;
+        $parsed['estimated'] = $this->firstNumericPriceValue($prices, ['estimated_cost', 'estimated-cost']);
+        $parsed['gross'] = $this->firstNumericPriceValue($prices, ['gross_amount', 'gross-amount', 'gross']);
+        $parsed['net'] = $this->firstNumericPriceValue($prices, ['net_amount', 'net-amount', 'net']);
         $parsed['fallback'] = $fallbackRate;
         $parsed['manual_norgespakke'] = $manualNorgespakkePrice;
-        $parsed['price'] = isset($prices['price']) && is_numeric($prices['price']) ? (float) $prices['price'] : null;
-        $parsed['total'] = isset($prices['total']) && is_numeric($prices['total']) ? (float) $prices['total'] : null;
+        $parsed['price'] = $this->firstNumericPriceValue($prices, ['price', 'amount']);
+        $parsed['total'] = $this->firstNumericPriceValue($prices, ['total', 'total_amount', 'total-amount']);
 
         return $parsed;
+    }
+
+    /**
+     * @param array<string,mixed> $prices
+     * @param array<int,string> $keys
+     */
+    private function firstNumericPriceValue(array $prices, array $keys): ?float
+    {
+        foreach ($keys as $key) {
+            if (!array_key_exists($key, $prices) || !is_numeric($prices[$key])) {
+                continue;
+            }
+
+            return (float) $prices[$key];
+        }
+
+        return null;
     }
 
     /**

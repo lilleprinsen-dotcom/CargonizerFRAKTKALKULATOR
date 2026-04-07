@@ -651,18 +651,19 @@ final class CargonizerClient implements RateProviderInterface
         }
 
         $errors = [];
-        $errorNodes = $document->xpath('//error');
+        $errorNodes = $document->xpath('//error | //errors/error | //api-error');
         if (is_array($errorNodes)) {
             foreach ($errorNodes as $errorNode) {
                 if (!$errorNode instanceof \SimpleXMLElement) {
                     continue;
                 }
 
-                $errors[] = [
-                    'code' => sanitize_text_field((string) ($errorNode->code ?? '')),
-                    'field' => sanitize_text_field((string) ($errorNode->field ?? '')),
-                    'message' => sanitize_text_field((string) ($errorNode->message ?? (string) $errorNode)),
-                ];
+                $entry = $this->extractXmlErrorEntry($errorNode);
+                if (($entry['code'] ?? '') === '' && ($entry['field'] ?? '') === '' && ($entry['message'] ?? '') === '') {
+                    continue;
+                }
+
+                $errors[] = $entry;
             }
         }
 
@@ -681,7 +682,11 @@ final class CargonizerClient implements RateProviderInterface
                 $requirementFlags['servicepartner_required'] = true;
             }
 
-            if (strpos($haystack, 'sms') !== false) {
+            if (strpos($haystack, 'sms') !== false
+                || strpos($haystack, 'service required') !== false
+                || strpos($haystack, 'service is required') !== false
+                || strpos($haystack, 'services required') !== false
+            ) {
                 $requirementFlags['sms_required'] = true;
             }
         }
@@ -693,9 +698,26 @@ final class CargonizerClient implements RateProviderInterface
                 'gross_amount' => $this->xmlNodeFloat($document, ['//gross_amount', '//gross-amount']),
                 'net_amount' => $this->xmlNodeFloat($document, ['//net_amount', '//net-amount']),
                 'price' => $this->xmlNodeFloat($document, ['//price', '//amount']),
-                'total' => $this->xmlNodeFloat($document, ['//total', '//total_amount']),
+                'total' => $this->xmlNodeFloat($document, ['//total', '//total_amount', '//total-amount']),
             ],
             'requirements' => $requirementFlags,
+        ];
+    }
+
+    /**
+     * @return array{code:string,field:string,message:string}
+     */
+    private function extractXmlErrorEntry(\SimpleXMLElement $errorNode): array
+    {
+        $attributes = $errorNode->attributes();
+        $code = (string) ($errorNode->code ?? $errorNode->{'error-code'} ?? $attributes['code'] ?? $attributes['error-code'] ?? '');
+        $field = (string) ($errorNode->field ?? $errorNode->{'error-field'} ?? $attributes['field'] ?? $attributes['error-field'] ?? '');
+        $message = (string) ($errorNode->message ?? $errorNode->{'error-message'} ?? $attributes['message'] ?? $attributes['error-message'] ?? (string) $errorNode);
+
+        return [
+            'code' => sanitize_text_field($code),
+            'field' => sanitize_text_field($field),
+            'message' => sanitize_text_field($message),
         ];
     }
 

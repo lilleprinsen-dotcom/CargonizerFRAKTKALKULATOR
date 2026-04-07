@@ -250,4 +250,84 @@ XML;
         self::assertSame(164.0, $result['estimate_debug']['calculation']['manual_handling_fee']);
         self::assertSame(1, $result['estimate_debug']['calculation']['manual_handling_package_count']);
     }
+
+    public function testResolveAdminEstimateUsesHyphenatedGrossAmountWhenGrossIsConfigured(): void
+    {
+        $settings = $this->createMock(SettingsService::class);
+        $settings->method('getSettings')->willReturn([
+            'method_pricing' => [
+                'lp_cargonizer_hyphen' => [
+                    'price_source' => 'gross',
+                    'vat_percent' => 0,
+                    'handling_fee' => 0,
+                ],
+            ],
+        ]);
+        $settings->method('getStaticFallbackRates')->willReturn([]);
+
+        $client = $this->createMock(CargonizerClient::class);
+        $client->method('estimateConsignmentCost')->willReturn([
+            'prices' => [
+                'gross-amount' => 199.9,
+            ],
+            'requirements' => [],
+            'errors' => [],
+        ]);
+        $calculator = $this->createMock(RateCalculator::class);
+        $registry = new ShippingMethodRegistry($settings, $client, $client, $calculator);
+
+        $result = $registry->resolveAdminEstimate(
+            [
+                'method_id' => 'lp_cargonizer_hyphen',
+                'carrier_name' => 'Bring',
+                'title' => 'Hyphen gross',
+            ],
+            ['colli' => [['weight' => 1, 'length' => 10, 'width' => 10, 'height' => 10]]],
+            []
+        );
+
+        self::assertSame('gross', $result['estimate_debug']['selected_source']['source']);
+        self::assertSame(199.9, $result['estimate_debug']['selected_source']['value']);
+        self::assertSame(199.9, $result['estimate_debug']['price_fields']['gross']);
+    }
+
+    public function testResolveAdminEstimateFallsBackFromConfiguredGrossToNetAlias(): void
+    {
+        $settings = $this->createMock(SettingsService::class);
+        $settings->method('getSettings')->willReturn([
+            'method_pricing' => [
+                'lp_cargonizer_fallback' => [
+                    'price_source' => 'gross',
+                    'vat_percent' => 0,
+                    'handling_fee' => 0,
+                ],
+            ],
+        ]);
+        $settings->method('getStaticFallbackRates')->willReturn([]);
+
+        $client = $this->createMock(CargonizerClient::class);
+        $client->method('estimateConsignmentCost')->willReturn([
+            'prices' => [
+                'net-amount' => 88.8,
+            ],
+            'requirements' => [],
+            'errors' => [],
+        ]);
+        $calculator = $this->createMock(RateCalculator::class);
+        $registry = new ShippingMethodRegistry($settings, $client, $client, $calculator);
+
+        $result = $registry->resolveAdminEstimate(
+            [
+                'method_id' => 'lp_cargonizer_fallback',
+                'carrier_name' => 'Bring',
+                'title' => 'Fallback order',
+            ],
+            ['colli' => [['weight' => 1, 'length' => 10, 'width' => 10, 'height' => 10]]],
+            []
+        );
+
+        self::assertSame('net', $result['estimate_debug']['selected_source']['source']);
+        self::assertSame('configured_source_unavailable', $result['estimate_debug']['selected_source']['fallback_reason']);
+        self::assertSame(88.8, $result['estimate_debug']['price_fields']['net']);
+    }
 }
