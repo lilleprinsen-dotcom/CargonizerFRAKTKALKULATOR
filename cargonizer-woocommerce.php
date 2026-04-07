@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Lilleprinsen Cargonizer Connector
  * Description: WooCommerce Cargonizer integration with modular architecture.
- * Version: 2.0.0
+ * Version: 2.1.0
  * WC requires at least: 7.0.0
  * WC tested up to: 10.2.0
  * Author: Lilleprinsen
@@ -14,6 +14,10 @@ if (!defined('ABSPATH')) {
 
 if (!defined('LP_CARGONIZER_PLUGIN_FILE')) {
     define('LP_CARGONIZER_PLUGIN_FILE', __FILE__);
+}
+
+if (!defined('LP_CARGONIZER_VERSION')) {
+    define('LP_CARGONIZER_VERSION', '2.1.0');
 }
 
 $autoload = __DIR__ . '/vendor/autoload.php';
