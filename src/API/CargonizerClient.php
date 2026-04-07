@@ -181,7 +181,7 @@ final class CargonizerClient implements RateProviderInterface
             [
                 'headers' => [
                     'Accept' => 'application/xml',
-                    'Content-Type' => 'application/xml',
+                    'Content-Type' => 'application/xml; charset=utf-8',
                 ],
                 'body' => $xmlBody,
             ],
@@ -535,11 +535,11 @@ final class CargonizerClient implements RateProviderInterface
         $xml[] = '<country>' . $this->xmlEscape((string) ($recipient['country'] ?? '')) . '</country>';
         $xml[] = '</consignee>';
 
-        if ($servicePartner !== '') {
-            $xml[] = '<service_partner><number>' . $this->xmlEscape($servicePartner) . '</number></service_partner>';
-        }
-
         $xml[] = '</parts>';
+
+        if ($servicePartner !== '') {
+            $xml[] = '<service_partner>' . $this->xmlEscape($servicePartner) . '</service_partner>';
+        }
 
         $services = isset($estimateOptions['services']) && is_array($estimateOptions['services']) ? $estimateOptions['services'] : [];
         if ($services !== []) {
@@ -554,8 +554,7 @@ final class CargonizerClient implements RateProviderInterface
                     continue;
                 }
 
-                $xml[] = '<service>';
-                $xml[] = '<id>' . $this->xmlEscape($serviceId) . '</id>';
+                $xml[] = '<service>' . $this->xmlEscape($serviceId);
                 if (isset($service['value']) && (string) $service['value'] !== '') {
                     $xml[] = '<value>' . $this->xmlEscape((string) $service['value']) . '</value>';
                 }
@@ -564,6 +563,14 @@ final class CargonizerClient implements RateProviderInterface
             $xml[] = '</services>';
         }
 
+        $packageCount = 0;
+        foreach ($packages as $package) {
+            if (is_array($package)) {
+                $packageCount++;
+            }
+        }
+
+        $xml[] = '<number_of_packages>' . $packageCount . '</number_of_packages>';
         $xml[] = '<items>';
         foreach ($packages as $package) {
             if (!is_array($package)) {
@@ -577,7 +584,14 @@ final class CargonizerClient implements RateProviderInterface
             $volumeDm3 = ($length * $width * $height) / 1000;
             $description = sanitize_text_field((string) ($package['description'] ?? ''));
 
-            $xml[] = '<item type="package" amount="1" weight="' . $this->xmlEscape((string) $weight) . '" volume="' . $this->xmlEscape((string) $volumeDm3) . '" description="' . $this->xmlEscape($description) . '"/>';
+            $xml[] = '<item type="package" amount="1">';
+            $xml[] = '<description>' . $this->xmlEscape($description) . '</description>';
+            $xml[] = '<weight>' . $this->xmlEscape((string) $weight) . '</weight>';
+            $xml[] = '<volume>' . $this->xmlEscape((string) $volumeDm3) . '</volume>';
+            $xml[] = '<length>' . $this->xmlEscape((string) $length) . '</length>';
+            $xml[] = '<width>' . $this->xmlEscape((string) $width) . '</width>';
+            $xml[] = '<height>' . $this->xmlEscape((string) $height) . '</height>';
+            $xml[] = '</item>';
         }
         $xml[] = '</items>';
 
