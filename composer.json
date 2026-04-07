@@ -1,0 +1,13 @@
+{
+  "name": "lilleprinsen/cargonizer-woocommerce",
+  "description": "Cargonizer connector plugin for WooCommerce",
+  "type": "wordpress-plugin",
+  "require": {
+    "php": ">=7.4"
+  },
+  "autoload": {
+    "psr-4": {
+      "Lilleprinsen\\Cargonizer\\": "src/"
+    }
+  }
+}
