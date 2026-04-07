@@ -2,9 +2,12 @@
 
 namespace Lilleprinsen\Cargonizer\Infrastructure;
 
+use Lilleprinsen\Cargonizer\Admin\AdminOrderController;
 use Lilleprinsen\Cargonizer\Admin\AdminPagesController;
 use Lilleprinsen\Cargonizer\API\AjaxController;
 use Lilleprinsen\Cargonizer\API\RestController;
+use Lilleprinsen\Cargonizer\Checkout\CheckoutService;
+use Lilleprinsen\Cargonizer\Compatibility\CompatibilityBridge;
 use Lilleprinsen\Cargonizer\Shipping\RateCalculator;
 use Lilleprinsen\Cargonizer\Shipping\ShippingMethodRegistry;
 use Lilleprinsen\Cargonizer\Shipping\WooShippingIntegration;
@@ -34,14 +37,20 @@ final class Plugin
         $this->container->set(RateCalculator::class, fn (): RateCalculator => new RateCalculator());
         $this->container->set(ShippingMethodRegistry::class, fn (ServiceContainer $c): ShippingMethodRegistry => new ShippingMethodRegistry($c->get(SettingsService::class), $c->get(CargonizerClient::class), $c->get(RateCalculator::class)));
         $this->container->set(WooShippingIntegration::class, fn (ServiceContainer $c): WooShippingIntegration => new WooShippingIntegration($c->get(ShippingMethodRegistry::class)));
+        $this->container->set(CompatibilityBridge::class, fn (): CompatibilityBridge => new CompatibilityBridge());
+        $this->container->set(CheckoutService::class, fn (): CheckoutService => new CheckoutService());
         $this->container->set(AdminPagesController::class, fn (ServiceContainer $c): AdminPagesController => new AdminPagesController($c->get(SettingsService::class), $c->get(ShippingMethodRegistry::class)));
+        $this->container->set(AdminOrderController::class, fn (): AdminOrderController => new AdminOrderController());
         $this->container->set(AjaxController::class, fn (ServiceContainer $c): AjaxController => new AjaxController($c->get(ShippingMethodRegistry::class)));
         $this->container->set(RestController::class, fn (ServiceContainer $c): RestController => new RestController($c->get(ShippingMethodRegistry::class)));
         $this->container->set(HooksRegistrar::class, fn (ServiceContainer $c): HooksRegistrar => new HooksRegistrar(
             $c->get(AdminPagesController::class),
+            $c->get(AdminOrderController::class),
             $c->get(AjaxController::class),
             $c->get(RestController::class),
-            $c->get(WooShippingIntegration::class)
+            $c->get(WooShippingIntegration::class),
+            $c->get(CheckoutService::class),
+            $c->get(CompatibilityBridge::class)
         ));
     }
 }

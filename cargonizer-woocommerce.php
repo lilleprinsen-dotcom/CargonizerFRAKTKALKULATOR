@@ -10,6 +10,10 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+if (!defined('LP_CARGONIZER_PLUGIN_FILE')) {
+    define('LP_CARGONIZER_PLUGIN_FILE', __FILE__);
+}
+
 $autoload = __DIR__ . '/vendor/autoload.php';
 if (file_exists($autoload)) {
     require_once $autoload;
