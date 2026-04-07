@@ -11,6 +11,7 @@ use Lilleprinsen\Cargonizer\Compatibility\CompatibilityBridge;
 use Lilleprinsen\Cargonizer\Compatibility\OrderHooksAdapter;
 use Lilleprinsen\Cargonizer\Compatibility\WooCommerceVersionGuard;
 use Lilleprinsen\Cargonizer\Shipping\WooShippingIntegration;
+use Lilleprinsen\Cargonizer\Shipping\ShippingMethodRegistry;
 
 final class HooksRegistrar
 {
@@ -23,6 +24,7 @@ final class HooksRegistrar
     private CompatibilityBridge $compatibilityBridge;
     private OrderHooksAdapter $orderHooksAdapter;
     private WooCommerceVersionGuard $wooCommerceVersionGuard;
+    private ShippingMethodRegistry $shippingMethodRegistry;
 
     public function __construct(
         AdminPagesController $adminPages,
@@ -33,7 +35,8 @@ final class HooksRegistrar
         CheckoutHookAdapter $checkoutHookAdapter,
         CompatibilityBridge $compatibilityBridge,
         OrderHooksAdapter $orderHooksAdapter,
-        WooCommerceVersionGuard $wooCommerceVersionGuard
+        WooCommerceVersionGuard $wooCommerceVersionGuard,
+        ShippingMethodRegistry $shippingMethodRegistry
     ) {
         $this->adminPages = $adminPages;
         $this->adminOrderController = $adminOrderController;
@@ -44,6 +47,7 @@ final class HooksRegistrar
         $this->compatibilityBridge = $compatibilityBridge;
         $this->orderHooksAdapter = $orderHooksAdapter;
         $this->wooCommerceVersionGuard = $wooCommerceVersionGuard;
+        $this->shippingMethodRegistry = $shippingMethodRegistry;
     }
 
     public function register(): void
@@ -71,5 +75,7 @@ final class HooksRegistrar
         $this->orderHooksAdapter->registerOrderColumnHooks();
 
         add_action('woocommerce_admin_order_data_after_shipping_address', [$this->adminOrderController, 'renderOrderShipmentPanel']);
+        add_action(ShippingMethodRegistry::ACTION_REFRESH_METHODS, [$this->shippingMethodRegistry, 'runRefreshMethodsJob']);
+        add_action(ShippingMethodRegistry::ACTION_RUN_BULK_ESTIMATE, [$this->shippingMethodRegistry, 'runBulkEstimateJob']);
     }
 }
