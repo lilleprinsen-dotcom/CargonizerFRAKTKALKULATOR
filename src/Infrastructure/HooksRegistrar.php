@@ -6,8 +6,10 @@ use Lilleprinsen\Cargonizer\Admin\AdminOrderController;
 use Lilleprinsen\Cargonizer\Admin\AdminPagesController;
 use Lilleprinsen\Cargonizer\API\AjaxController;
 use Lilleprinsen\Cargonizer\API\RestController;
-use Lilleprinsen\Cargonizer\Checkout\CheckoutService;
+use Lilleprinsen\Cargonizer\Compatibility\CheckoutHookAdapter;
 use Lilleprinsen\Cargonizer\Compatibility\CompatibilityBridge;
+use Lilleprinsen\Cargonizer\Compatibility\OrderHooksAdapter;
+use Lilleprinsen\Cargonizer\Compatibility\WooCommerceVersionGuard;
 use Lilleprinsen\Cargonizer\Shipping\WooShippingIntegration;
 
 final class HooksRegistrar
@@ -17,8 +19,10 @@ final class HooksRegistrar
     private AjaxController $ajaxController;
     private RestController $restController;
     private WooShippingIntegration $wooShipping;
-    private CheckoutService $checkoutService;
+    private CheckoutHookAdapter $checkoutHookAdapter;
     private CompatibilityBridge $compatibilityBridge;
+    private OrderHooksAdapter $orderHooksAdapter;
+    private WooCommerceVersionGuard $wooCommerceVersionGuard;
 
     public function __construct(
         AdminPagesController $adminPages,
@@ -26,21 +30,30 @@ final class HooksRegistrar
         AjaxController $ajaxController,
         RestController $restController,
         WooShippingIntegration $wooShipping,
-        CheckoutService $checkoutService,
-        CompatibilityBridge $compatibilityBridge
+        CheckoutHookAdapter $checkoutHookAdapter,
+        CompatibilityBridge $compatibilityBridge,
+        OrderHooksAdapter $orderHooksAdapter,
+        WooCommerceVersionGuard $wooCommerceVersionGuard
     ) {
         $this->adminPages = $adminPages;
         $this->adminOrderController = $adminOrderController;
         $this->ajaxController = $ajaxController;
         $this->restController = $restController;
         $this->wooShipping = $wooShipping;
-        $this->checkoutService = $checkoutService;
+        $this->checkoutHookAdapter = $checkoutHookAdapter;
         $this->compatibilityBridge = $compatibilityBridge;
+        $this->orderHooksAdapter = $orderHooksAdapter;
+        $this->wooCommerceVersionGuard = $wooCommerceVersionGuard;
     }
 
     public function register(): void
     {
         add_action('before_woocommerce_init', [$this->compatibilityBridge, 'declareWooCommerceFeaturesCompatibility']);
+        $this->wooCommerceVersionGuard->registerAdminNoticeIfIncompatible();
+
+        if (!$this->wooCommerceVersionGuard->isCompatible()) {
+            return;
+        }
 
         add_action('admin_menu', [$this->adminPages, 'registerMenu']);
         add_action('admin_init', [$this->adminPages, 'registerSettings']);
@@ -53,13 +66,9 @@ final class HooksRegistrar
         add_action('woocommerce_shipping_init', [$this->wooShipping, 'shippingInit']);
         add_filter('woocommerce_shipping_methods', [$this->wooShipping, 'registerMethods']);
 
-        add_action('woocommerce_checkout_create_order', [$this->checkoutService, 'persistOrderMetadata'], 20, 2);
+        add_action('woocommerce_checkout_create_order', [$this->checkoutHookAdapter, 'persistOrderMetadataFromHook'], 20, 2);
 
-        add_filter('manage_edit-shop_order_columns', [$this->adminOrderController, 'registerLegacyOrderColumns']);
-        add_action('manage_shop_order_posts_custom_column', [$this->adminOrderController, 'renderLegacyOrderColumn'], 10, 2);
-
-        add_filter('manage_woocommerce_page_wc-orders_columns', [$this->adminOrderController, 'registerHposOrderColumns']);
-        add_action('manage_woocommerce_page_wc-orders_custom_column', [$this->adminOrderController, 'renderHposOrderColumn'], 10, 2);
+        $this->orderHooksAdapter->registerOrderColumnHooks();
 
         add_action('woocommerce_admin_order_data_after_shipping_address', [$this->adminOrderController, 'renderOrderShipmentPanel']);
     }
