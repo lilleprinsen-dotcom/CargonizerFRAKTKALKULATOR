@@ -35,7 +35,7 @@
     </form>
 
     <?php if (is_array($connectionTest)) : ?>
-        <div class="notice <?php echo !empty($connectionTest['ok']) ? 'notice-success' : 'notice-error'; ?>">
+        <div class="notice <?php echo esc_attr(!empty($connectionTest['ok']) ? 'notice-success' : 'notice-error'); ?>">
             <p>
                 <strong><?php echo esc_html((string) ($connectionTest['message'] ?? 'Connection test finished.')); ?></strong><br />
                 Status: <?php echo esc_html((string) ($connectionTest['status'] ?? 0)); ?>,
