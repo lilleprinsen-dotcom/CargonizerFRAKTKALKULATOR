@@ -63,6 +63,7 @@ final class HooksRegistrar
         add_action('admin_init', [$this->adminPages, 'registerSettings']);
         add_action('admin_post_lp_cargonizer_save', [$this->adminPages, 'handleSave']);
         add_action('admin_post_lp_cargonizer_test_connection', [$this->adminPages, 'handleConnectionTest']);
+        add_action('admin_post_lp_cargonizer_refresh_methods', [$this->adminPages, 'handleRefreshMethods']);
 
         add_action('wp_ajax_lp_cargonizer_fetch_methods', [$this->ajaxController, 'fetchMethods']);
         add_action('wp_ajax_lp_cargonizer_get_order_estimate_data', [$this->ajaxController, 'getOrderEstimateData']);

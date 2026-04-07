@@ -147,10 +147,15 @@ final class SettingsService
             $clean[] = [
                 'instance_id' => max(1, (int) ($method['instance_id'] ?? 0)),
                 'method_id' => $methodId,
+                'carrier_name' => sanitize_text_field((string) ($method['carrier_name'] ?? '')),
+                'carrier_id' => sanitize_text_field((string) ($method['carrier_id'] ?? '')),
                 'agreement_id' => sanitize_text_field((string) ($method['agreement_id'] ?? '')),
                 'agreement_name' => sanitize_text_field((string) ($method['agreement_name'] ?? '')),
+                'agreement_description' => sanitize_text_field((string) ($method['agreement_description'] ?? '')),
+                'agreement_number' => sanitize_text_field((string) ($method['agreement_number'] ?? '')),
                 'product_id' => sanitize_text_field((string) ($method['product_id'] ?? '')),
                 'product_name' => sanitize_text_field((string) ($method['product_name'] ?? '')),
+                'services' => $this->sanitizeServices($method['services'] ?? []),
                 'title' => sanitize_text_field((string) ($method['title'] ?? '')),
                 'enabled' => (string) ($method['enabled'] ?? '') === 'no' ? 'no' : 'yes',
                 'fallback_rate' => max(0.0, $this->toFloat($method['fallback_rate'] ?? 0)),
@@ -177,12 +182,29 @@ final class SettingsService
                 continue;
             }
 
+            $priceSource = sanitize_key((string) ($config['price_source'] ?? 'estimated'));
+            if (!in_array($priceSource, ['estimated', 'net', 'gross', 'fallback', 'manual_norgespakke'], true)) {
+                $priceSource = 'estimated';
+            }
+
+            $roundingMode = sanitize_key((string) ($config['rounding_mode'] ?? 'none'));
+            if (!in_array($roundingMode, ['none', 'nearest_1', 'nearest_10', 'price_ending_9'], true)) {
+                $roundingMode = 'none';
+            }
+
             $clean[$id] = [
+                'price_source' => $priceSource,
                 'discount_percent' => $this->toFloat($config['discount_percent'] ?? 0),
-                'fuel_percent' => $this->toFloat($config['fuel_percent'] ?? 0),
-                'toll_fee' => max(0.0, $this->toFloat($config['toll_fee'] ?? 0)),
+                'fuel_surcharge' => $this->toFloat($config['fuel_surcharge'] ?? 0),
+                'fuel_percent' => $this->toFloat($config['fuel_surcharge'] ?? ($config['fuel_percent'] ?? 0)),
+                'toll_surcharge' => max(0.0, $this->toFloat($config['toll_surcharge'] ?? 0)),
+                'toll_fee' => max(0.0, $this->toFloat($config['toll_surcharge'] ?? ($config['toll_fee'] ?? 0))),
                 'handling_fee' => max(0.0, $this->toFloat($config['handling_fee'] ?? 0)),
                 'vat_percent' => max(0.0, $this->toFloat($config['vat_percent'] ?? 0)),
+                'rounding_mode' => $roundingMode,
+                'delivery_to_pickup_point' => max(0.0, $this->toFloat($config['delivery_to_pickup_point'] ?? 0)),
+                'delivery_to_home' => max(0.0, $this->toFloat($config['delivery_to_home'] ?? 0)),
+                'manual_norgespakke_include_handling' => !empty($config['manual_norgespakke_include_handling']) ? 1 : 0,
             ];
         }
 
@@ -212,10 +234,31 @@ final class SettingsService
         return $clean;
     }
 
+    /**
+     * @param mixed $services
+     * @return array<int,string>
+     */
+    private function sanitizeServices($services): array
+    {
+        if (!is_array($services)) {
+            return [];
+        }
+
+        $clean = [];
+        foreach ($services as $service) {
+            $name = sanitize_text_field((string) $service);
+            if ($name !== '') {
+                $clean[] = $name;
+            }
+        }
+
+        return array_values(array_unique($clean));
+    }
+
     private function normalizeSecret(string $rawInput, string $existingEncrypted): string
     {
         if ($rawInput === '') {
-            return '';
+            return $existingEncrypted;
         }
 
         if (strpos($rawInput, '*****') !== false && $existingEncrypted !== '') {

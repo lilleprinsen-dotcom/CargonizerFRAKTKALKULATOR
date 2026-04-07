@@ -183,12 +183,14 @@ final class CargonizerClient implements RateProviderInterface
         }
 
         $status = (int) wp_remote_retrieve_response_code($response);
+        $rawXml = wp_remote_retrieve_body($response);
 
         return [
             'ok' => $status >= 200 && $status < 300,
             'message' => $status >= 200 && $status < 300 ? 'Connection successful.' : 'Connection failed.',
             'correlation_id' => $correlationId,
             'status' => $status,
+            'raw_xml' => is_string($rawXml) ? trim((string) $this->maskSecrets($rawXml)) : '',
         ];
     }
 

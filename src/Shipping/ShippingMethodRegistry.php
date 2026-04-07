@@ -96,12 +96,12 @@ final class ShippingMethodRegistry
             return [];
         }
 
-        $methods = $this->extractMethodsFromXml($payload['raw']);
+        $current = $this->settings->getSettings();
+        $methods = $this->extractMethodsFromXml($payload['raw'], isset($current['available_methods']) && is_array($current['available_methods']) ? $current['available_methods'] : []);
         if ($methods === []) {
             return [];
         }
 
-        $current = $this->settings->getSettings();
         $current['available_methods'] = $methods;
         $this->settings->save($current);
 
@@ -228,7 +228,7 @@ final class ShippingMethodRegistry
     /**
      * @return array<int,array<string,mixed>>
      */
-    private function extractMethodsFromXml(string $xml): array
+    private function extractMethodsFromXml(string $xml, array $existingMethods = []): array
     {
         if (!function_exists('simplexml_load_string')) {
             return [];
@@ -268,17 +268,38 @@ final class ShippingMethodRegistry
                 if ($title === '') {
                     $title = sprintf('Cargonizer %s/%s', $agreementId, $productId);
                 }
+                $existing = $this->findMethodById($methodId, $existingMethods);
+
+                $carrierName = trim((string) ($agreement->carrier ?? ''));
+                $carrierId = trim((string) ($agreement->carrier_id ?? ''));
+                $agreementDescription = trim((string) ($agreement->description ?? ''));
+                $agreementNumber = trim((string) ($agreement->number ?? ''));
+                $services = [];
+                $serviceNodes = $product->xpath('.//service');
+                if (is_array($serviceNodes)) {
+                    foreach ($serviceNodes as $serviceNode) {
+                        $serviceName = trim((string) ($serviceNode->name ?? $serviceNode));
+                        if ($serviceName !== '') {
+                            $services[] = $serviceName;
+                        }
+                    }
+                }
 
                 $methods[] = [
                     'instance_id' => $instance,
                     'method_id' => $methodId,
+                    'carrier_name' => $carrierName,
+                    'carrier_id' => $carrierId,
                     'agreement_id' => $agreementId,
                     'agreement_name' => $agreementName,
+                    'agreement_description' => $agreementDescription,
+                    'agreement_number' => $agreementNumber,
                     'product_id' => $productId,
                     'product_name' => $productName,
+                    'services' => array_values(array_unique($services)),
                     'title' => $title,
-                    'enabled' => 'yes',
-                    'fallback_rate' => 0,
+                    'enabled' => (string) ($existing['enabled'] ?? 'yes') === 'no' ? 'no' : 'yes',
+                    'fallback_rate' => isset($existing['fallback_rate']) && is_numeric($existing['fallback_rate']) ? (float) $existing['fallback_rate'] : 0,
                 ];
 
                 $instance++;
@@ -286,6 +307,25 @@ final class ShippingMethodRegistry
         }
 
         return $methods;
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $methods
+     * @return array<string,mixed>
+     */
+    private function findMethodById(string $methodId, array $methods): array
+    {
+        foreach ($methods as $method) {
+            if (!is_array($method)) {
+                continue;
+            }
+
+            if ((string) ($method['method_id'] ?? '') === $methodId) {
+                return $method;
+            }
+        }
+
+        return [];
     }
 
     /**
