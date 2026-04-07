@@ -209,7 +209,7 @@ final class ShippingMethodRegistry
             return null;
         }
 
-        $calculated = $this->rateCalculator->calculate($rawRate, $this->settings->getPricingModifiers(), $quoteRequest);
+        $calculated = $this->rateCalculator->calculate($rawRate, $this->getMethodPricingConfig($methodConfig), $quoteRequest);
         $calculated = (float) apply_filters('lp_cargonizer_rate_post_processing', $calculated, $rawRate, $methodConfig, $package, $quoteRequest, $quote);
         $validated = $this->validateRate($calculated);
 
@@ -257,25 +257,31 @@ final class ShippingMethodRegistry
             ]
         );
 
+        $methodPricing = $this->getMethodPricingConfig($methodConfig);
         $prices = is_array($result['prices'] ?? null) ? $result['prices'] : [];
-        $baseRate = $this->pickAdminEstimateBaseRate($methodConfig, $prices, $fallbackRate);
-        $quoteRequest = new RateQuoteRequest(
-            (string) ($methodConfig['agreement_id'] ?? ''),
-            (string) ($methodConfig['product_id'] ?? ''),
-            $this->compactPackage($package)
-        );
-
-        $computedRate = $baseRate !== null
-            ? $this->validateRate($this->rateCalculator->calculate($baseRate, $this->settings->getPricingModifiers(), $quoteRequest))
+        $priceFields = $this->parseEstimatePriceFields($prices, $fallbackRate);
+        $sourcePriority = $this->getPriceSourcePriority((string) ($methodPricing['price_source'] ?? 'estimated'));
+        $selectedSource = $this->selectEstimatePriceValue($priceFields, $sourcePriority);
+        $pricingComputation = $this->calculateEstimateFromPriceSource($selectedSource, $methodPricing);
+        $computedRate = isset($pricingComputation['rounded_rate']) && is_numeric($pricingComputation['rounded_rate'])
+            ? $this->validateRate((float) $pricingComputation['rounded_rate'])
             : null;
 
         return [
             'method_id' => $methodId,
             'title' => (string) ($methodConfig['title'] ?? $methodId),
             'rate' => $computedRate,
-            'price_source' => $this->getMethodPriceSource($methodConfig),
+            'price_source' => (string) ($methodPricing['price_source'] ?? 'estimated'),
             'fallback_rate' => $fallbackRate,
+            'fallback_reason' => (string) ($selectedSource['fallback_reason'] ?? ''),
             'estimate' => $result,
+            'estimate_debug' => [
+                'errors' => $this->parseResponseErrorDetails($result),
+                'price_fields' => $priceFields,
+                'source_priority' => $sourcePriority,
+                'selected_source' => $selectedSource,
+                'calculation' => $pricingComputation,
+            ],
             'supports_sms' => $this->resolveSmsServiceId($methodConfig) !== '',
         ];
     }
@@ -663,44 +669,204 @@ final class ShippingMethodRegistry
 
     /**
      * @param array<string,mixed> $methodConfig
+     * @return array<string,mixed>
      */
-    private function getMethodPriceSource(array $methodConfig): string
+    private function getMethodPricingConfig(array $methodConfig): array
     {
         $settings = $this->settings->getSettings();
         $methodPricing = is_array($settings['method_pricing'] ?? null) ? $settings['method_pricing'] : [];
         $methodId = sanitize_key((string) ($methodConfig['method_id'] ?? ''));
-        $configured = is_array($methodPricing[$methodId] ?? null) ? $methodPricing[$methodId] : [];
 
-        return sanitize_key((string) ($configured['price_source'] ?? 'estimated'));
+        return is_array($methodPricing[$methodId] ?? null) ? $methodPricing[$methodId] : [];
     }
 
     /**
-     * @param array<string,mixed> $methodConfig
-     * @param array<string,mixed> $prices
+     * @param array<string,mixed> $result
+     * @return array<int,array<string,string>>
      */
-    private function pickAdminEstimateBaseRate(array $methodConfig, array $prices, ?float $fallbackRate): ?float
+    private function parseResponseErrorDetails(array $result): array
     {
-        $priceSource = $this->getMethodPriceSource($methodConfig);
-        $candidates = [
-            'estimated' => $prices['estimated_cost'] ?? null,
-            'gross' => $prices['gross_amount'] ?? null,
-            'net' => $prices['net_amount'] ?? null,
-            'fallback' => $fallbackRate,
-            'manual_norgespakke' => $fallbackRate,
-        ];
+        $errors = is_array($result['errors'] ?? null) ? $result['errors'] : [];
+        $normalized = [];
 
-        $primary = $candidates[$priceSource] ?? null;
-        if (is_numeric($primary)) {
-            return (float) $primary;
+        foreach ($errors as $error) {
+            if (!is_array($error)) {
+                continue;
+            }
+
+            $normalized[] = [
+                'code' => sanitize_text_field((string) ($error['code'] ?? '')),
+                'field' => sanitize_text_field((string) ($error['field'] ?? '')),
+                'message' => sanitize_text_field((string) ($error['message'] ?? '')),
+            ];
         }
 
-        foreach (['estimated_cost', 'gross_amount', 'net_amount', 'price', 'total'] as $key) {
-            if (isset($prices[$key]) && is_numeric($prices[$key])) {
-                return (float) $prices[$key];
+        return $normalized;
+    }
+
+    /**
+     * @param array<string,mixed> $prices
+     * @return array<string,float|null>
+     */
+    private function parseEstimatePriceFields(array $prices, ?float $fallbackRate): array
+    {
+        $parsed = [];
+        $parsed['estimated'] = isset($prices['estimated_cost']) && is_numeric($prices['estimated_cost']) ? (float) $prices['estimated_cost'] : null;
+        $parsed['gross'] = isset($prices['gross_amount']) && is_numeric($prices['gross_amount']) ? (float) $prices['gross_amount'] : null;
+        $parsed['net'] = isset($prices['net_amount']) && is_numeric($prices['net_amount']) ? (float) $prices['net_amount'] : null;
+        $parsed['fallback'] = $fallbackRate;
+        $parsed['manual_norgespakke'] = $fallbackRate;
+        $parsed['price'] = isset($prices['price']) && is_numeric($prices['price']) ? (float) $prices['price'] : null;
+        $parsed['total'] = isset($prices['total']) && is_numeric($prices['total']) ? (float) $prices['total'] : null;
+
+        return $parsed;
+    }
+
+    /**
+     * @return array<int,string>
+     */
+    private function getPriceSourcePriority(string $configuredSource): array
+    {
+        $basePriority = ['estimated', 'gross', 'net', 'fallback', 'manual_norgespakke'];
+        $configured = sanitize_key($configuredSource);
+        if (!in_array($configured, $basePriority, true)) {
+            $configured = 'estimated';
+        }
+
+        $priority = [$configured];
+        foreach ($basePriority as $source) {
+            if ($source !== $configured) {
+                $priority[] = $source;
             }
         }
 
-        return $fallbackRate;
+        return $priority;
+    }
+
+    /**
+     * @param array<string,float|null> $priceFields
+     * @param array<int,string> $sourcePriority
+     * @return array<string,mixed>
+     */
+    private function selectEstimatePriceValue(array $priceFields, array $sourcePriority): array
+    {
+        foreach ($sourcePriority as $source) {
+            if (!array_key_exists($source, $priceFields)) {
+                continue;
+            }
+
+            $value = $priceFields[$source];
+            if (is_numeric($value)) {
+                $fallbackReason = $source === $sourcePriority[0] ? 'configured_source_available' : 'configured_source_unavailable';
+
+                return [
+                    'source' => $source,
+                    'value' => (float) $value,
+                    'fallback_reason' => $fallbackReason,
+                ];
+            }
+        }
+
+        foreach (['price', 'total'] as $legacySource) {
+            $legacyValue = $priceFields[$legacySource] ?? null;
+            if (is_numeric($legacyValue)) {
+                return [
+                    'source' => $legacySource,
+                    'value' => (float) $legacyValue,
+                    'fallback_reason' => 'fallback_to_legacy_' . $legacySource,
+                ];
+            }
+        }
+
+        return [
+            'source' => '',
+            'value' => null,
+            'fallback_reason' => 'no_price_source_available',
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $selectedSource
+     * @param array<string,mixed> $methodPricing
+     * @return array<string,mixed>
+     */
+    private function calculateEstimateFromPriceSource(array $selectedSource, array $methodPricing): array
+    {
+        $selectedValue = $selectedSource['value'] ?? null;
+        if (!is_numeric($selectedValue)) {
+            return [
+                'rounded_rate' => null,
+                'calculation_status' => 'missing_selected_value',
+            ];
+        }
+
+        $listPrice = max(0.0, (float) $selectedValue);
+        $discountPercent = max(0.0, min(100.0, (float) ($methodPricing['discount_percent'] ?? 0)));
+        $fuelPercent = max(0.0, min(100.0, (float) ($methodPricing['fuel_percent'] ?? ($methodPricing['fuel_surcharge'] ?? 0))));
+        $tollFee = max(0.0, (float) ($methodPricing['toll_fee'] ?? ($methodPricing['toll_surcharge'] ?? 0)));
+        $handlingFee = max(0.0, (float) ($methodPricing['handling_fee'] ?? 0));
+        $vatPercent = max(0.0, min(100.0, (float) ($methodPricing['vat_percent'] ?? 0)));
+
+        if (($selectedSource['source'] ?? '') === 'manual_norgespakke' && empty($methodPricing['manual_norgespakke_include_handling'])) {
+            $handlingFee = 0.0;
+        }
+
+        $fuelMultiplier = 1 + ($fuelPercent / 100);
+        $baseFreightBeforeDiscount = max(0.0, ($listPrice - $tollFee - $handlingFee) / $fuelMultiplier);
+        $discountAmount = $baseFreightBeforeDiscount * ($discountPercent / 100);
+        $discountedBaseFreight = max(0.0, $baseFreightBeforeDiscount - $discountAmount);
+        $fuelAmount = $discountedBaseFreight * ($fuelPercent / 100);
+        $subtotalExVat = $discountedBaseFreight + $fuelAmount + $tollFee + $handlingFee;
+        $vatAmount = $subtotalExVat * ($vatPercent / 100);
+        $totalBeforeRounding = $subtotalExVat + $vatAmount;
+
+        $roundedRate = $this->applyRoundingMode($totalBeforeRounding, (string) ($methodPricing['rounding_mode'] ?? 'none'));
+
+        return [
+            'calculation_status' => 'ok',
+            'list_price_including_fees' => $listPrice,
+            'base_freight_before_discount' => $baseFreightBeforeDiscount,
+            'discount_percent' => $discountPercent,
+            'discount_amount' => $discountAmount,
+            'discounted_base_freight' => $discountedBaseFreight,
+            'fuel_percent' => $fuelPercent,
+            'fuel_amount' => $fuelAmount,
+            'toll_fee' => $tollFee,
+            'handling_fee' => $handlingFee,
+            'subtotal_ex_vat' => $subtotalExVat,
+            'vat_percent' => $vatPercent,
+            'vat_amount' => $vatAmount,
+            'total_before_rounding' => $totalBeforeRounding,
+            'rounding_mode' => (string) ($methodPricing['rounding_mode'] ?? 'none'),
+            'rounded_rate' => $roundedRate,
+        ];
+    }
+
+    private function applyRoundingMode(float $amount, string $roundingMode): float
+    {
+        $rate = max(0.0, $amount);
+        $mode = sanitize_key($roundingMode);
+
+        if ($mode === 'nearest_1') {
+            return (float) round($rate, 0);
+        }
+
+        if ($mode === 'nearest_10') {
+            return (float) (round($rate / 10) * 10);
+        }
+
+        if ($mode === 'price_ending_9') {
+            $integer = (int) ceil($rate);
+            if ($integer <= 9) {
+                return 9.0;
+            }
+
+            return (float) ((int) (floor($integer / 10) * 10) - 1 < $integer
+                ? (int) (floor($integer / 10) * 10) + 9
+                : (int) (floor($integer / 10) * 10) - 1);
+        }
+
+        return round($rate, 2);
     }
 
     /**
