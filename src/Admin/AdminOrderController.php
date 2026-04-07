@@ -247,8 +247,7 @@ final class AdminOrderController
         <script>
             (function () {
                 const modal = document.getElementById('lp-cargonizer-estimator-modal');
-                const openBtn = document.getElementById('lp-cargonizer-open-estimator');
-                if (!modal || !openBtn) return;
+                if (!modal) return;
 
                 const state = { orderData: null, methods: [], packages: [], selectedMethods: new Set(), lastPayload: null, methodOverrides: {} };
                 const endpoints = {
@@ -495,9 +494,21 @@ final class AdminOrderController
                     resultsEl.innerHTML = '<p>Klar for estimat.</p>';
                 };
 
-                openBtn.addEventListener('click', async () => {
+                const openModal = async () => {
                     modal.style.display = 'block';
                     try { await loadModalData(); } catch (e) { resultsEl.innerHTML = `<p class="lp-cargonizer-error">${esc(e.message || e)}</p>`; retryBtn.style.display = ''; }
+                };
+
+                const openBtn = document.getElementById('lp-cargonizer-open-estimator');
+                if (openBtn) {
+                    openBtn.addEventListener('click', openModal);
+                }
+
+                document.addEventListener('click', (event) => {
+                    const trigger = event.target.closest('#lp-cargonizer-open-estimator');
+                    if (!trigger) return;
+                    event.preventDefault();
+                    openModal();
                 });
 
                 modal.addEventListener('click', (event) => {
