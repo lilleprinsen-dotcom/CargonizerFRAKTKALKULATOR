@@ -250,11 +250,12 @@ final class AdminOrderController
                 const openBtn = document.getElementById('lp-cargonizer-open-estimator');
                 if (!modal || !openBtn) return;
 
-                const state = { orderData: null, methods: [], packages: [], selectedMethods: new Set(), lastPayload: null };
+                const state = { orderData: null, methods: [], packages: [], selectedMethods: new Set(), lastPayload: null, methodOverrides: {} };
                 const endpoints = {
                     orderData: '<?php echo esc_js(admin_url('admin-ajax.php')); ?>?action=lp_cargonizer_get_order_estimate_data',
                     methods: '<?php echo esc_js(admin_url('admin-ajax.php')); ?>?action=lp_cargonizer_get_shipping_options',
-                    run: '<?php echo esc_js(admin_url('admin-ajax.php')); ?>?action=lp_cargonizer_run_bulk_estimate'
+                    run: '<?php echo esc_js(admin_url('admin-ajax.php')); ?>?action=lp_cargonizer_run_bulk_estimate',
+                    servicepartners: '<?php echo esc_js(admin_url('admin-ajax.php')); ?>?action=lp_cargonizer_get_servicepartner_options'
                 };
                 const summaryEl = modal.querySelector('.lp-cargonizer-order-summary');
                 const recipientEl = modal.querySelector('.lp-cargonizer-recipient-summary');
@@ -347,19 +348,56 @@ final class AdminOrderController
                         nonce: modal.dataset.runBulkEstimateNonce,
                         order_id: modal.dataset.orderId,
                         method_ids: JSON.stringify(methodIds),
-                        packages: JSON.stringify(state.packages)
+                        packages: JSON.stringify(state.packages),
+                        method_overrides: JSON.stringify(state.methodOverrides)
                     };
                     state.lastPayload = payload;
 
                     try {
                         const data = await fetchJson(endpoints.run, payload);
                         if (!data.success) throw new Error((data.data && data.data.message) || 'Ukjent feil');
-                        const rows = (data.data.results || []).map((r) => `<tr><td>${esc(r.title || r.method_id)}</td><td>${r.rate === null ? 'Ikke tilgjengelig' : formatNum(r.rate) + ' kr'}</td></tr>`).join('');
-                        resultsEl.innerHTML = `<table class="widefat striped"><thead><tr><th>Metode</th><th>Estimat</th></tr></thead><tbody>${rows || '<tr><td colspan="2">Ingen resultater.</td></tr>'}</tbody></table>`;
+                        const rows = (data.data.results || []).map((r) => {
+                            const estimate = r.estimate || {};
+                            const req = estimate.requirements || {};
+                            const errors = Array.isArray(estimate.errors) ? estimate.errors : [];
+                            const errorText = errors.map((e) => e && e.message ? e.message : '').filter(Boolean).join(' · ');
+                            const methodOverride = state.methodOverrides[r.method_id] || {};
+                            const servicepartnerOptions = Array.isArray(r.servicepartner_options) ? r.servicepartner_options : [];
+                            const showServicepartner = req.servicepartner_required === true;
+                            const showSms = req.sms_required === true || r.supports_sms === true;
+                            const servicepartnerSelect = showServicepartner
+                                ? `<div><label>Servicepartner:
+                                    <select data-action="set-servicepartner" data-method-id="${esc(r.method_id)}">
+                                        <option value="">Velg …</option>
+                                        ${servicepartnerOptions.map((sp) => `<option value="${esc(sp.id)}" ${String(methodOverride.service_partner || '') === String(sp.id) ? 'selected' : ''}>${esc(sp.name || sp.id)}</option>`).join('')}
+                                    </select>
+                                   </label></div>`
+                                : '';
+                            const smsToggle = showSms
+                                ? `<label><input type="checkbox" data-action="toggle-sms" data-method-id="${esc(r.method_id)}" ${methodOverride.sms_enabled ? 'checked' : ''}> SMS-varsel</label>`
+                                : '';
+                            const retryOne = (showServicepartner || showSms)
+                                ? `<button type="button" class="button button-small" data-action="retry-one" data-method-id="${esc(r.method_id)}">Prøv metode på nytt</button>`
+                                : '';
+
+                            return `<tr>
+                                <td>${esc(r.title || r.method_id)}<br><small>${esc(r.method_id)}</small></td>
+                                <td>${r.rate === null ? 'Ikke tilgjengelig' : formatNum(r.rate) + ' kr'}</td>
+                                <td>${errorText ? `<span class="lp-cargonizer-error">${esc(errorText)}</span>` : ''}</td>
+                                <td>${servicepartnerSelect}${smsToggle ? `<div>${smsToggle}</div>` : ''}${retryOne}</td>
+                            </tr>`;
+                        }).join('');
+                        resultsEl.innerHTML = `<table class="widefat striped"><thead><tr><th>Metode</th><th>Estimat</th><th>Feil</th><th>Tiltak</th></tr></thead><tbody>${rows || '<tr><td colspan="4">Ingen resultater.</td></tr>'}</tbody></table>`;
                     } catch (e) {
                         resultsEl.innerHTML = `<p class="lp-cargonizer-error">Kunne ikke hente estimat: ${esc(e.message || e)}</p>`;
                         retryBtn.style.display = '';
                     }
+                };
+
+                const retrySingleMethod = async (methodId) => {
+                    if (!methodId) return;
+                    state.selectedMethods = new Set([methodId]);
+                    await runEstimate();
                 };
 
                 const loadModalData = async () => {
@@ -400,6 +438,7 @@ final class AdminOrderController
                     if (action === 'clear-all-methods') { state.selectedMethods.clear(); renderMethods(state.methods); }
                     if (action === 'run-estimate') runEstimate();
                     if (action === 'retry' && state.lastPayload) runEstimate();
+                    if (action === 'retry-one') retrySingleMethod(actionTarget.dataset.methodId || '');
                 });
 
                 colliBody.addEventListener('input', (event) => {
@@ -421,6 +460,45 @@ final class AdminOrderController
                     if (!input || !input.dataset || !input.dataset.method) return;
                     if (input.checked) state.selectedMethods.add(input.dataset.method);
                     else state.selectedMethods.delete(input.dataset.method);
+                });
+
+                resultsEl.addEventListener('change', async (event) => {
+                    const target = event.target;
+                    if (!target || !target.dataset) return;
+                    const methodId = target.dataset.methodId || '';
+                    if (!methodId) return;
+                    if (!state.methodOverrides[methodId]) state.methodOverrides[methodId] = {};
+
+                    if (target.dataset.action === 'set-servicepartner') {
+                        state.methodOverrides[methodId].service_partner = target.value || '';
+                        return;
+                    }
+
+                    if (target.dataset.action === 'toggle-sms') {
+                        state.methodOverrides[methodId].sms_enabled = !!target.checked;
+                    }
+                });
+
+                resultsEl.addEventListener('focusin', async (event) => {
+                    const target = event.target;
+                    if (!target || !target.dataset || target.dataset.action !== 'set-servicepartner') return;
+                    if (target.dataset.loaded === '1') return;
+                    const methodId = target.dataset.methodId || '';
+                    const destination = ((state.orderData || {}).package || {}).destination || {};
+                    try {
+                        const response = await fetchJson(endpoints.servicepartners, {
+                            nonce: modal.dataset.getServicepartnerOptionsNonce,
+                            method_id: methodId,
+                            destination: JSON.stringify(destination)
+                        });
+                        if (!response.success) return;
+                        const opts = (response.data && response.data.servicepartners) || [];
+                        if (!Array.isArray(opts)) return;
+                        target.innerHTML = `<option value="">Velg …</option>${opts.map((sp) => `<option value="${esc(sp.id)}">${esc(sp.name || sp.id)}</option>`).join('')}`;
+                        target.dataset.loaded = '1';
+                    } catch (e) {
+                        // no-op
+                    }
                 });
             })();
         </script>
