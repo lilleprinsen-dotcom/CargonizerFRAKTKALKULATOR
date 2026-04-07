@@ -38,4 +38,15 @@ final class SettingsServiceTest extends TestCase
         self::assertSame('enc:v1:abc', $clean['api_key']);
         self::assertSame('enc:v1:def', $clean['sender_id']);
     }
+
+    public function testSanitizeSettingsPreservesSenderRelationIdCharacters(): void
+    {
+        $service = new SettingsService(new SettingsRepository());
+
+        $clean = $service->sanitizeSettings([
+            'sender_id' => '  user-rel_01-ABC  ',
+        ]);
+
+        self::assertSame('user-rel_01-ABC', $clean['sender_id']);
+    }
 }

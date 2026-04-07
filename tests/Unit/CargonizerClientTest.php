@@ -1,6 +1,36 @@
 <?php
 
-namespace Lilleprinsen\Cargonizer\Tests\Unit;
+namespace Lilleprinsen\Cargonizer\API {
+    function wp_remote_get($url, $args = [])
+    {
+        $handler = $GLOBALS['__lp_cargonizer_wp_remote_get_handler'] ?? null;
+        if (is_callable($handler)) {
+            return $handler($url, $args);
+        }
+
+        return [
+            'response' => ['code' => 200],
+            'headers' => [],
+            'body' => '',
+        ];
+    }
+
+    function wp_remote_post($url, $args = [])
+    {
+        $handler = $GLOBALS['__lp_cargonizer_wp_remote_post_handler'] ?? null;
+        if (is_callable($handler)) {
+            return $handler($url, $args);
+        }
+
+        return [
+            'response' => ['code' => 200],
+            'headers' => [],
+            'body' => '',
+        ];
+    }
+}
+
+namespace Lilleprinsen\Cargonizer\Tests\Unit {
 
 use Lilleprinsen\Cargonizer\API\CargonizerClient;
 use Lilleprinsen\Cargonizer\Infrastructure\SettingsService;
@@ -8,6 +38,12 @@ use PHPUnit\Framework\TestCase;
 
 final class CargonizerClientTest extends TestCase
 {
+    protected function tearDown(): void
+    {
+        unset($GLOBALS['__lp_cargonizer_wp_remote_get_handler'], $GLOBALS['__lp_cargonizer_wp_remote_post_handler']);
+        parent::tearDown();
+    }
+
     public function testParseConsignmentCostEstimateXmlSupportsHyphenatedPriceNodesAndErrorAttributes(): void
     {
         $xml = <<<'XML'
@@ -60,6 +96,53 @@ XML;
         self::assertSame(168.4, $parsed['prices']['net_amount']);
     }
 
+    public function testResolveEndpointUsesDocumentedLiveHostByDefault(): void
+    {
+        $settings = $this->createConfiguredMock(SettingsService::class, [
+            'getSettings' => ['rate_api_url' => 'https://rates.example.test/quote'],
+        ]);
+
+        $client = new CargonizerClient($settings);
+        $method = new \ReflectionMethod($client, 'resolveEndpoint');
+        $method->setAccessible(true);
+
+        self::assertSame('https://cargonizer.no/profile.xml', $method->invoke($client, 'profile'));
+        self::assertSame('https://cargonizer.no/transport_agreements.xml', $method->invoke($client, 'transport_agreements'));
+    }
+
+    public function testConnectionTestSeparatesApiKeyFailureFromSenderFailure(): void
+    {
+        $settings = $this->createConfiguredMock(SettingsService::class, [
+            'getApiKey' => 'key-123',
+            'getSenderId' => 'rel-abc',
+            'getSettings' => [],
+        ]);
+
+        $GLOBALS['__lp_cargonizer_wp_remote_get_handler'] = static function ($url, $args) {
+            if (strpos($url, 'profile.xml') !== false) {
+                return [
+                    'response' => ['code' => 200],
+                    'headers' => [],
+                    'body' => '<profile><id>1</id></profile>',
+                ];
+            }
+
+            return [
+                'response' => ['code' => 401],
+                'headers' => [],
+                'body' => '<?xml version="1.0" encoding="UTF-8"?><errors><error>This action requires authentication</error></errors>',
+            ];
+        };
+
+        $client = new CargonizerClient($settings);
+        $result = $client->testConnection();
+
+        self::assertFalse($result['ok']);
+        self::assertSame(401, $result['status']);
+        self::assertStringContainsString('Sender/user relation ID rejected', $result['message']);
+        self::assertSame('https://cargonizer.no/transport_agreements.xml', $result['endpoint']);
+    }
+
     /**
      * @return array<string,mixed>
      */
@@ -75,4 +158,5 @@ XML;
 
         return $parsed;
     }
+}
 }

@@ -102,7 +102,7 @@
                 <th scope="row"><label for="lp-cargonizer-sender-id">Sender ID</label></th>
                 <td>
                     <input id="lp-cargonizer-sender-id" type="text" name="lp_cargonizer_settings[sender_id]" value="" class="regular-text" placeholder="Leave blank to keep current sender" />
-                    <p class="description">Use the sender/user relation ID from Cargonizer Preferences. Non-digit characters are ignored automatically.</p>
+                    <p class="description">Use the sender/user relation ID from Cargonizer Preferences exactly as shown.</p>
                 </td>
             </tr>
         </table>
@@ -208,7 +208,10 @@
             <p>
                 <strong><?php echo esc_html((string) ($connectionTest['message'] ?? 'Autentiseringstest fullført.')); ?></strong><br />
                 Status: <?php echo esc_html((string) ($connectionTest['status'] ?? 0)); ?>,
-                Correlation ID: <code><?php echo esc_html((string) ($connectionTest['correlation_id'] ?? 'n/a')); ?></code>
+                Correlation ID: <code><?php echo esc_html((string) ($connectionTest['correlation_id'] ?? 'n/a')); ?></code>,
+                Request ID: <code><?php echo esc_html((string) ($connectionTest['request_id'] ?? 'n/a')); ?></code><br />
+                Endpoint: <code><?php echo esc_html((string) ($connectionTest['endpoint'] ?? 'n/a')); ?></code>,
+                Final URL: <code><?php echo esc_html((string) ($connectionTest['final_url'] ?? 'n/a')); ?></code>
             </p>
             <?php if (!empty($authRows)) : ?>
                 <h3>Resultater fra autentiseringstest (transportavtaler/produkter/tjenester)</h3>

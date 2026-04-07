@@ -21,6 +21,9 @@ $GLOBALS['__wc_session'] = [];
 function sanitize_text_field($value) { return trim(strip_tags((string) $value)); }
 function sanitize_key($value) { return strtolower(preg_replace('/[^a-zA-Z0-9_\-]/', '', (string) $value)); }
 function esc_url_raw($value) { return filter_var((string) $value, FILTER_SANITIZE_URL) ?: ''; }
+function untrailingslashit($value) { return rtrim((string) $value, '/'); }
+function wp_http_validate_url($value) { return filter_var((string) $value, FILTER_VALIDATE_URL) ? (string) $value : false; }
+function wp_parse_url($url, $component = -1) { return parse_url((string) $url, $component); }
 
 function __($value, $domain = null) { return $value; }
 function esc_html__($value, $domain = null) { return $value; }
@@ -46,6 +49,27 @@ function update_option($k, $v, $autoload = null) { $GLOBALS['__wp_options'][$k] 
 function get_transient($k) { return $GLOBALS['__wp_transients'][$k] ?? false; }
 function set_transient($k, $v, $ttl = 0) { $GLOBALS['__wp_transients'][$k] = $v; return true; }
 function wp_generate_uuid4() { return 'uuid-test'; }
+function wp_remote_retrieve_response_code($response) { return is_array($response) ? (int) ($response['response']['code'] ?? 0) : 0; }
+function wp_remote_retrieve_body($response) { return is_array($response) ? (string) ($response['body'] ?? '') : ''; }
+function wp_remote_retrieve_header($response, $header) {
+    if (!is_array($response) || !isset($response['headers']) || !is_array($response['headers'])) { return ''; }
+    foreach ($response['headers'] as $key => $value) {
+        if (strtolower((string) $key) === strtolower((string) $header)) { return is_string($value) ? $value : ''; }
+    }
+    return '';
+}
+function wp_rand($min = null, $max = null) { return $min ?? 0; }
+
+if (!class_exists('WP_Error')) {
+    class WP_Error {
+        private string $code;
+        private string $message;
+        public function __construct(string $code = '', string $message = '') { $this->code = $code; $this->message = $message; }
+        public function get_error_message(): string { return $this->message; }
+        public function get_error_code(): string { return $this->code; }
+    }
+}
+function is_wp_error($thing) { return $thing instanceof WP_Error; }
 
 class WC_Order {
     public array $meta = [];
