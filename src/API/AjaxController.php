@@ -19,6 +19,8 @@ final class AjaxController
             wp_send_json_error(['message' => 'Unauthorized'], 403);
         }
 
+        check_ajax_referer('lp_cargonizer_fetch_methods', 'nonce');
+
         $async = !isset($_REQUEST['sync']) || sanitize_text_field((string) wp_unslash($_REQUEST['sync'])) !== '1';
         if ($async && $this->shippingRegistry->refreshFromCargonizerAsync()) {
             wp_send_json_success([

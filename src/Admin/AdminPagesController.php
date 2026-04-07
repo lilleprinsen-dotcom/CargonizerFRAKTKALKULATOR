@@ -33,7 +33,15 @@ final class AdminPagesController
 
     public function registerSettings(): void
     {
-        register_setting('lp_cargonizer_group', 'lp_cargonizer_settings');
+        register_setting('lp_cargonizer_group', 'lp_cargonizer_settings', [
+            'type' => 'array',
+            'sanitize_callback' => function ($value): array {
+                $settings = is_array($value) ? $value : [];
+
+                return $this->settings->sanitizeSettings($settings, $this->settings->getSettings());
+            },
+            'default' => [],
+        ]);
     }
 
     public function handleSave(): void
@@ -72,6 +80,10 @@ final class AdminPagesController
 
     public function renderPage(): void
     {
+        if (!current_user_can('manage_woocommerce')) {
+            wp_die('Unauthorized');
+        }
+
         $settings = $this->settings->getSettings();
         $methods = $this->shippingRegistry->all();
         $diagnostics = $this->client->getDiagnostics();
