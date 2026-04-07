@@ -58,7 +58,8 @@ final class Plugin
             $c->get(CheckoutHookAdapter::class),
             $c->get(CompatibilityBridge::class),
             $c->get(OrderHooksAdapter::class),
-            $c->get(WooCommerceVersionGuard::class)
+            $c->get(WooCommerceVersionGuard::class),
+            $c->get(ShippingMethodRegistry::class)
         ));
     }
 }

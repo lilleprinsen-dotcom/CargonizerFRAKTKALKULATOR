@@ -8,9 +8,15 @@ use Lilleprinsen\Cargonizer\Shipping\Methods\CargonizerShippingMethod;
 
 final class ShippingMethodRegistry
 {
+    public const ACTION_REFRESH_METHODS = 'lp_cargonizer_refresh_methods';
+    public const ACTION_RUN_BULK_ESTIMATE = 'lp_cargonizer_bulk_estimate';
+
     private SettingsService $settings;
     private CargonizerClient $client;
     private RateCalculator $rateCalculator;
+
+    /** @var array<string,float|null> */
+    private array $requestRateMemo = [];
 
     public function __construct(SettingsService $settings, CargonizerClient $client, RateCalculator $rateCalculator)
     {
@@ -78,6 +84,68 @@ final class ShippingMethodRegistry
         return $methods;
     }
 
+    public function refreshFromCargonizerAsync(): bool
+    {
+        if (!function_exists('as_enqueue_async_action')) {
+            return false;
+        }
+
+        as_enqueue_async_action(self::ACTION_REFRESH_METHODS, [], 'lp-cargonizer');
+
+        return true;
+    }
+
+    public function runRefreshMethodsJob(): void
+    {
+        $this->refreshFromCargonizer();
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $jobs
+     */
+    public function enqueueBulkEstimate(array $jobs): ?string
+    {
+        if (!function_exists('as_enqueue_async_action')) {
+            return null;
+        }
+
+        $jobId = wp_generate_uuid4();
+        as_enqueue_async_action(self::ACTION_RUN_BULK_ESTIMATE, [
+            'job_id' => $jobId,
+            'jobs' => $jobs,
+        ], 'lp-cargonizer');
+
+        return $jobId;
+    }
+
+    /**
+     * @param array<string,mixed> $args
+     */
+    public function runBulkEstimateJob(array $args): void
+    {
+        $jobId = sanitize_text_field((string) ($args['job_id'] ?? ''));
+        $jobs = isset($args['jobs']) && is_array($args['jobs']) ? $args['jobs'] : [];
+        if ($jobId === '' || $jobs === []) {
+            return;
+        }
+
+        $results = [];
+        foreach ($jobs as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+
+            $methodConfig = isset($item['method']) && is_array($item['method']) ? $item['method'] : [];
+            $package = isset($item['package']) && is_array($item['package']) ? $item['package'] : [];
+            $results[] = [
+                'method_id' => (string) ($methodConfig['method_id'] ?? ''),
+                'rate' => $this->resolveRate($methodConfig, $package),
+            ];
+        }
+
+        set_transient('lp_carg_bulk_' . $jobId, $results, 15 * MINUTE_IN_SECONDS);
+    }
+
     /**
      * @param array<string,mixed> $methodConfig
      * @param array<string,mixed> $package
@@ -85,16 +153,22 @@ final class ShippingMethodRegistry
     public function resolveRate(array $methodConfig, array $package): ?float
     {
         $cacheKey = $this->buildRateCacheKey($methodConfig, $package);
-        $cached = get_transient($cacheKey);
+        if (array_key_exists($cacheKey, $this->requestRateMemo)) {
+            return $this->requestRateMemo[$cacheKey];
+        }
 
+        $cached = get_transient($cacheKey);
         if (is_numeric($cached)) {
-            return $this->validateRate((float) $cached);
+            $validated = $this->validateRate((float) $cached);
+            $this->requestRateMemo[$cacheKey] = $validated;
+
+            return $validated;
         }
 
         $quote = $this->client->fetchRateQuote([
             'agreement_id' => (string) ($methodConfig['agreement_id'] ?? ''),
             'product_id' => (string) ($methodConfig['product_id'] ?? ''),
-            'package' => $package,
+            'package' => $this->compactPackage($package),
         ]);
 
         $rawRate = is_array($quote) && isset($quote['price']) && is_numeric($quote['price'])
@@ -106,6 +180,8 @@ final class ShippingMethodRegistry
         }
 
         if ($rawRate === null) {
+            $this->requestRateMemo[$cacheKey] = null;
+
             return null;
         }
 
@@ -113,10 +189,13 @@ final class ShippingMethodRegistry
         $validated = $this->validateRate($calculated);
 
         if ($validated === null) {
+            $this->requestRateMemo[$cacheKey] = null;
+
             return null;
         }
 
         set_transient($cacheKey, $validated, 10 * MINUTE_IN_SECONDS);
+        $this->requestRateMemo[$cacheKey] = $validated;
 
         return $validated;
     }
@@ -213,23 +292,46 @@ final class ShippingMethodRegistry
             'method_id' => (string) ($methodConfig['method_id'] ?? ''),
             'agreement_id' => (string) ($methodConfig['agreement_id'] ?? ''),
             'product_id' => (string) ($methodConfig['product_id'] ?? ''),
-            'destination' => $package['destination'] ?? [],
-            'contents' => array_map(static function ($item): array {
+            'package' => $this->compactPackage($package),
+        ];
+
+        return 'lp_carg_rate_' . md5(wp_json_encode($parts));
+    }
+
+    /**
+     * @param array<string,mixed> $package
+     * @return array<string,mixed>
+     */
+    private function compactPackage(array $package): array
+    {
+        $destination = is_array($package['destination'] ?? null) ? $package['destination'] : [];
+        $contents = is_array($package['contents'] ?? null) ? $package['contents'] : [];
+
+        return [
+            'destination' => [
+                'country' => sanitize_text_field((string) ($destination['country'] ?? '')),
+                'state' => sanitize_text_field((string) ($destination['state'] ?? '')),
+                'postcode' => sanitize_text_field((string) ($destination['postcode'] ?? '')),
+                'city' => sanitize_text_field((string) ($destination['city'] ?? '')),
+            ],
+            'contents' => array_values(array_map(static function ($item): array {
                 if (!is_array($item)) {
                     return [];
                 }
+
+                $product = isset($item['data']) && is_object($item['data']) ? $item['data'] : null;
 
                 return [
                     'product_id' => (int) ($item['product_id'] ?? 0),
                     'variation_id' => (int) ($item['variation_id'] ?? 0),
                     'quantity' => (int) ($item['quantity'] ?? 0),
-                    'line_total' => (float) ($item['line_total'] ?? 0),
-                    'line_tax' => (float) ($item['line_tax'] ?? 0),
+                    'weight' => $product !== null && method_exists($product, 'get_weight') ? (float) $product->get_weight() : 0.0,
+                    'length' => $product !== null && method_exists($product, 'get_length') ? (float) $product->get_length() : 0.0,
+                    'width' => $product !== null && method_exists($product, 'get_width') ? (float) $product->get_width() : 0.0,
+                    'height' => $product !== null && method_exists($product, 'get_height') ? (float) $product->get_height() : 0.0,
                 ];
-            }, is_array($package['contents'] ?? null) ? $package['contents'] : []),
+            }, $contents)),
         ];
-
-        return 'lp_carg_rate_' . md5(wp_json_encode($parts));
     }
 
     private function validateRate(float $rate): ?float
