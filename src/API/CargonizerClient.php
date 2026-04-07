@@ -9,7 +9,8 @@ use Lilleprinsen\Cargonizer\Infrastructure\SettingsService;
 
 final class CargonizerClient implements RateProviderInterface
 {
-    private const DEFAULT_BASE_URL = 'https://api.cargonizer.no';
+    private const DEFAULT_BASE_URL = 'https://cargonizer.no';
+    private const DEFAULT_SANDBOX_BASE_URL = 'https://sandbox.cargonizer.no';
     private const DEFAULT_TIMEOUT_SECONDS = 4;
     private const HTTP_MAX_RETRIES = 2;
     private const CIRCUIT_BREAKER_FAILURE_THRESHOLD = 3;
@@ -235,31 +236,91 @@ final class CargonizerClient implements RateProviderInterface
     public function testConnection(): array
     {
         $correlationId = wp_generate_uuid4();
-        $response = $this->requestWithRetry('GET', 'transport_agreements', [], $correlationId);
+        $apiKeyOnlyResponse = $this->requestWithRetry(
+            'GET',
+            'profile',
+            [],
+            $correlationId,
+            ['auth_mode' => 'key_only', 'allow_redirects' => true]
+        );
 
-        if (is_wp_error($response)) {
+        if (is_wp_error($apiKeyOnlyResponse)) {
             return [
                 'ok' => false,
-                'message' => $response->get_error_message(),
+                'message' => $apiKeyOnlyResponse->get_error_message(),
                 'correlation_id' => $correlationId,
                 'status' => 0,
             ];
         }
 
-        $status = (int) wp_remote_retrieve_response_code($response);
-        $rawXml = wp_remote_retrieve_body($response);
+        $apiKeyStatus = (int) wp_remote_retrieve_response_code($apiKeyOnlyResponse);
+        $apiKeyRawXml = wp_remote_retrieve_body($apiKeyOnlyResponse);
+        $apiKeyError = $this->extractFirstXmlErrorMessage(is_string($apiKeyRawXml) ? $apiKeyRawXml : '');
+        $apiKeyFinalUrl = $this->extractFinalUrl($apiKeyOnlyResponse);
+        $apiKeyRequestId = $this->extractRequestId(is_string($apiKeyRawXml) ? $apiKeyRawXml : '');
 
+        if ($apiKeyStatus < 200 || $apiKeyStatus >= 300) {
+            return [
+                'ok' => false,
+                'message' => $apiKeyStatus === 401
+                    ? 'Connection failed: API key rejected. Verify API key from Cargonizer Preferences.'
+                    : ($apiKeyError !== '' ? sprintf('Connection failed: %s', $apiKeyError) : 'Connection failed.'),
+                'correlation_id' => $correlationId,
+                'request_id' => $apiKeyRequestId,
+                'status' => $apiKeyStatus,
+                'endpoint' => (string) $this->resolveEndpoint('profile'),
+                'final_url' => $apiKeyFinalUrl,
+                'raw_xml' => is_string($apiKeyRawXml) ? trim((string) $this->maskSecrets($apiKeyRawXml)) : '',
+            ];
+        }
+
+        if ($this->isHostMismatchRedirect($apiKeyOnlyResponse, 'profile')) {
+            return [
+                'ok' => false,
+                'message' => 'Connection failed: Redirect/host mismatch detected. Verify Cargonizer API host configuration.',
+                'correlation_id' => $correlationId,
+                'request_id' => $apiKeyRequestId,
+                'status' => $apiKeyStatus,
+                'endpoint' => (string) $this->resolveEndpoint('profile'),
+                'final_url' => $apiKeyFinalUrl,
+                'raw_xml' => is_string($apiKeyRawXml) ? trim((string) $this->maskSecrets($apiKeyRawXml)) : '',
+            ];
+        }
+
+        $senderResponse = $this->requestWithRetry(
+            'GET',
+            'transport_agreements',
+            [],
+            $correlationId,
+            ['auth_mode' => 'full', 'allow_redirects' => true]
+        );
+        if (is_wp_error($senderResponse)) {
+            return [
+                'ok' => false,
+                'message' => $senderResponse->get_error_message(),
+                'correlation_id' => $correlationId,
+                'status' => 0,
+            ];
+        }
+
+        $status = (int) wp_remote_retrieve_response_code($senderResponse);
+        $rawXml = wp_remote_retrieve_body($senderResponse);
         $errorMessage = $this->extractFirstXmlErrorMessage(is_string($rawXml) ? $rawXml : '');
+        $requestId = $this->extractRequestId(is_string($rawXml) ? $rawXml : '');
+        $finalUrl = $this->extractFinalUrl($senderResponse);
 
         return [
             'ok' => $status >= 200 && $status < 300,
             'message' => $status >= 200 && $status < 300
                 ? 'Connection successful.'
                 : ($status === 401
-                    ? 'Connection failed: Authentication rejected. Verify API key and sender/user relation ID from Cargonizer Preferences.'
+                    ? 'Connection failed: Sender/user relation ID rejected. Verify sender/user relation ID from Cargonizer Preferences.'
                     : ($errorMessage !== '' ? sprintf('Connection failed: %s', $errorMessage) : 'Connection failed.')),
             'correlation_id' => $correlationId,
+            'request_id' => $requestId,
             'status' => $status,
+            'endpoint' => (string) $this->resolveEndpoint('transport_agreements'),
+            'final_url' => $finalUrl,
             'raw_xml' => is_string($rawXml) ? trim((string) $this->maskSecrets($rawXml)) : '',
         ];
     }
@@ -282,7 +343,7 @@ final class CargonizerClient implements RateProviderInterface
      * @param array<string,mixed> $args
      * @return array<string,mixed>|\WP_Error
      */
-    private function requestWithRetry(string $method, string $endpointKey, array $args, string $correlationId)
+    private function requestWithRetry(string $method, string $endpointKey, array $args, string $correlationId, array $requestOptions = [])
     {
         $endpoint = $this->resolveEndpoint($endpointKey);
         if ($endpoint === null) {
@@ -295,7 +356,9 @@ final class CargonizerClient implements RateProviderInterface
             $endpoint = add_query_arg($query, $endpoint);
         }
 
-        $authHeaders = $this->buildAuthHeaders();
+        $authMode = isset($requestOptions['auth_mode']) ? (string) $requestOptions['auth_mode'] : 'full';
+        $allowRedirects = !isset($requestOptions['allow_redirects']) || !empty($requestOptions['allow_redirects']);
+        $authHeaders = $this->buildAuthHeaders($authMode);
         if ($authHeaders === null) {
             return new \WP_Error('lp_cargonizer_auth_missing', 'Missing API credentials.');
         }
@@ -304,7 +367,7 @@ final class CargonizerClient implements RateProviderInterface
         $httpArgs = array_merge(
             [
                 'timeout' => $this->resolveTimeout(),
-                'redirection' => 1,
+                'redirection' => 0,
                 'headers' => [],
             ],
             $args
@@ -322,6 +385,7 @@ final class CargonizerClient implements RateProviderInterface
             $response = $method === 'POST'
                 ? wp_remote_post($endpoint, $httpArgs)
                 : wp_remote_get($endpoint, $httpArgs);
+            $response = $this->followRedirectIfNeeded($method, $response, $endpoint, $httpArgs, $allowRedirects);
 
             if (!$this->isTransientFailure($response)) {
                 if (!is_wp_error($response)) {
@@ -363,7 +427,7 @@ final class CargonizerClient implements RateProviderInterface
 
     private function resolveEndpoint(string $endpointKey): ?string
     {
-        $baseUrl = (string) apply_filters('lp_cargonizer_api_base_url', self::DEFAULT_BASE_URL);
+        $baseUrl = $this->resolveBaseUrl();
         $settings = $this->settings->getSettings();
 
         $map = [
@@ -371,6 +435,7 @@ final class CargonizerClient implements RateProviderInterface
             'service_partners' => rtrim($baseUrl, '/') . '/service_partners.xml',
             'rate_quote' => (string) ($settings['rate_api_url'] ?? ''),
             'consignment_costs' => rtrim($baseUrl, '/') . '/consignment_costs.xml',
+            'profile' => rtrim($baseUrl, '/') . '/profile.xml',
         ];
 
         $resolved = (string) ($map[$endpointKey] ?? '');
@@ -422,18 +487,190 @@ final class CargonizerClient implements RateProviderInterface
     /**
      * @return array<string,string>|null
      */
-    private function buildAuthHeaders(): ?array
+    private function buildAuthHeaders(string $mode = 'full'): ?array
     {
         $apiKey = $this->settings->getApiKey();
-        $senderId = $this->settings->getSenderId();
-        if ($apiKey === '' || $senderId === '') {
+        if ($apiKey === '') {
             return null;
         }
 
-        return [
+        $headers = [
             'X-Cargonizer-Key' => $apiKey,
-            'X-Cargonizer-Sender' => $senderId,
         ];
+
+        if ($mode === 'key_only') {
+            return $headers;
+        }
+
+        $senderId = $this->settings->getSenderId();
+        if ($senderId === '') {
+            return null;
+        }
+
+        $headers['X-Cargonizer-Sender'] = $senderId;
+
+        return $headers;
+    }
+
+    private function resolveBaseUrl(): string
+    {
+        $baseUrl = (string) apply_filters('lp_cargonizer_api_base_url', self::DEFAULT_BASE_URL);
+        if ($baseUrl !== '') {
+            return untrailingslashit($baseUrl);
+        }
+
+        $environment = (string) apply_filters('lp_cargonizer_api_environment', 'live');
+        if ($environment === 'sandbox') {
+            return self::DEFAULT_SANDBOX_BASE_URL;
+        }
+
+        return self::DEFAULT_BASE_URL;
+    }
+
+    /**
+     * @param array<string,mixed>|\WP_Error $response
+     * @param array<string,mixed> $httpArgs
+     * @return array<string,mixed>|\WP_Error
+     */
+    private function followRedirectIfNeeded(string $method, $response, string $requestUrl, array $httpArgs, bool $allowRedirects)
+    {
+        if (!$allowRedirects || is_wp_error($response)) {
+            return $response;
+        }
+
+        $status = (int) wp_remote_retrieve_response_code($response);
+        if ($status < 300 || $status >= 400) {
+            return $response;
+        }
+
+        $location = $this->extractHeaderValue($response, 'location');
+        if ($location === '') {
+            return $response;
+        }
+
+        $redirectUrl = wp_http_validate_url($location);
+        if (!is_string($redirectUrl) || $redirectUrl === '') {
+            $redirectUrl = $this->resolveRedirectUrl($requestUrl, $location);
+        }
+        if ($redirectUrl === '') {
+            return $response;
+        }
+
+        $redirectedResponse = strtoupper($method) === 'POST'
+            ? wp_remote_post($redirectUrl, $httpArgs)
+            : wp_remote_get($redirectUrl, $httpArgs);
+
+        if (!is_wp_error($redirectedResponse) && is_array($redirectedResponse)) {
+            $redirectedResponse['lp_cargonizer_final_url'] = $redirectUrl;
+            $redirectedResponse['lp_cargonizer_redirected_from'] = $requestUrl;
+            $redirectedResponse['lp_cargonizer_original_status'] = $status;
+        }
+
+        return $redirectedResponse;
+    }
+
+    /**
+     * @param array<string,mixed> $response
+     */
+    private function extractFinalUrl(array $response): string
+    {
+        $candidate = isset($response['lp_cargonizer_final_url']) ? (string) $response['lp_cargonizer_final_url'] : '';
+
+        return $candidate !== '' ? $candidate : '';
+    }
+
+    /**
+     * @param array<string,mixed> $response
+     */
+    private function isHostMismatchRedirect(array $response, string $endpointKey): bool
+    {
+        $finalUrl = $this->extractFinalUrl($response);
+        $configured = (string) $this->resolveEndpoint($endpointKey);
+        if ($finalUrl === '' || $configured === '') {
+            return false;
+        }
+
+        $configuredHost = (string) wp_parse_url($configured, PHP_URL_HOST);
+        $finalHost = (string) wp_parse_url($finalUrl, PHP_URL_HOST);
+
+        return $configuredHost !== '' && $finalHost !== '' && strtolower($configuredHost) !== strtolower($finalHost);
+    }
+
+    private function extractRequestId(string $rawXml): string
+    {
+        if ($rawXml === '' || !function_exists('simplexml_load_string')) {
+            return '';
+        }
+
+        $xml = @simplexml_load_string($rawXml);
+        if (!$xml instanceof \SimpleXMLElement) {
+            return '';
+        }
+
+        if (isset($xml->info->{'request-id'})) {
+            return trim((string) $xml->info->{'request-id'});
+        }
+
+        if (isset($xml->info->request_id)) {
+            return trim((string) $xml->info->request_id);
+        }
+
+        return '';
+    }
+
+    /**
+     * @param array<string,mixed> $response
+     */
+    private function extractHeaderValue(array $response, string $headerName): string
+    {
+        if (function_exists('wp_remote_retrieve_header')) {
+            $header = wp_remote_retrieve_header($response, $headerName);
+            if (is_string($header) && $header !== '') {
+                return trim($header);
+            }
+        }
+
+        $headers = $response['headers'] ?? [];
+        if (is_array($headers)) {
+            foreach ($headers as $key => $value) {
+                if (strtolower((string) $key) === strtolower($headerName)) {
+                    return is_string($value) ? trim($value) : '';
+                }
+            }
+        }
+
+        return '';
+    }
+
+    private function resolveRedirectUrl(string $requestUrl, string $location): string
+    {
+        if ($location === '') {
+            return '';
+        }
+
+        $location = trim($location);
+        if (strpos($location, 'http://') === 0 || strpos($location, 'https://') === 0) {
+            return $location;
+        }
+
+        $base = wp_parse_url($requestUrl);
+        if (!is_array($base) || empty($base['scheme']) || empty($base['host'])) {
+            return '';
+        }
+
+        $prefix = $base['scheme'] . '://' . $base['host'];
+        if (!empty($base['port'])) {
+            $prefix .= ':' . $base['port'];
+        }
+
+        if (strpos($location, '/') === 0) {
+            return $prefix . $location;
+        }
+
+        $path = isset($base['path']) ? (string) $base['path'] : '';
+        $dir = rtrim((string) preg_replace('#/[^/]*$#', '/', $path), '/');
+
+        return $prefix . ($dir !== '' ? '/' . ltrim($dir, '/') : '') . '/' . ltrim($location, '/');
     }
 
     /**

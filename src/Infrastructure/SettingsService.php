@@ -371,7 +371,7 @@ final class SettingsService
 
     private function normalizeSenderId(string $senderId): string
     {
-        return preg_replace('/\D+/', '', trim($senderId)) ?? '';
+        return trim($senderId);
     }
 
     private function encryptionKey(): string
