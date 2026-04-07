@@ -2,7 +2,7 @@
 
 namespace Lilleprinsen\Cargonizer\Shipping;
 
-use Lilleprinsen\Cargonizer\Infrastructure\CargonizerClient;
+use Lilleprinsen\Cargonizer\API\CargonizerClient;
 use Lilleprinsen\Cargonizer\Infrastructure\SettingsService;
 use Lilleprinsen\Cargonizer\Shipping\Methods\CargonizerShippingMethod;
 

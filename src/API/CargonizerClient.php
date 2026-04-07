@@ -1,0 +1,500 @@
+<?php
+
+namespace Lilleprinsen\Cargonizer\API;
+
+use Lilleprinsen\Cargonizer\Infrastructure\SettingsService;
+
+final class CargonizerClient
+{
+    private const DEFAULT_BASE_URL = 'https://api.cargonizer.no';
+    private const DEFAULT_TIMEOUT_SECONDS = 4;
+    private const HTTP_MAX_RETRIES = 2;
+    private const CIRCUIT_BREAKER_FAILURE_THRESHOLD = 3;
+    private const CIRCUIT_BREAKER_TTL = 120;
+    private const LOG_SOURCE = 'lp-cargonizer';
+
+    private SettingsService $settings;
+
+    /** @var array<string,mixed> */
+    private array $requestMemo = [];
+
+    /** @var \WC_Logger|null */
+    private $logger = null;
+
+    public function __construct(SettingsService $settings)
+    {
+        $this->settings = $settings;
+    }
+
+    public function fetchTransportAgreements(): array
+    {
+        $cacheKey = 'transport_agreements';
+        $memoized = $this->requestMemo[$cacheKey] ?? null;
+        if (is_array($memoized)) {
+            return $memoized;
+        }
+
+        $cached = $this->getCachedPayload('lp_carg_transport_agreements');
+        if (is_array($cached)) {
+            return $this->requestMemo[$cacheKey] = $cached;
+        }
+
+        $response = $this->requestWithRetry('GET', 'transport_agreements', [], wp_generate_uuid4());
+        if (is_wp_error($response)) {
+            return [];
+        }
+
+        $normalized = $this->normalizeXmlResponse($response);
+        if ($normalized === null) {
+            return [];
+        }
+
+        $this->setCachedPayload('lp_carg_transport_agreements', $normalized, 10 * MINUTE_IN_SECONDS);
+
+        return $this->requestMemo[$cacheKey] = $normalized;
+    }
+
+    public function fetchServicePartners(): array
+    {
+        $cacheKey = 'service_partners';
+        $memoized = $this->requestMemo[$cacheKey] ?? null;
+        if (is_array($memoized)) {
+            return $memoized;
+        }
+
+        $cached = $this->getCachedPayload('lp_carg_service_partners');
+        if (is_array($cached)) {
+            return $this->requestMemo[$cacheKey] = $cached;
+        }
+
+        $response = $this->requestWithRetry('GET', 'service_partners', [], wp_generate_uuid4());
+        if (is_wp_error($response)) {
+            return [];
+        }
+
+        $normalized = $this->normalizeXmlResponse($response);
+        if ($normalized === null) {
+            return [];
+        }
+
+        $this->setCachedPayload('lp_carg_service_partners', $normalized, 10 * MINUTE_IN_SECONDS);
+
+        return $this->requestMemo[$cacheKey] = $normalized;
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     * @return array<string,mixed>|null
+     */
+    public function fetchRateQuote(array $payload): ?array
+    {
+        $memoKey = 'quote:' . md5(wp_json_encode($payload));
+        if (isset($this->requestMemo[$memoKey]) && is_array($this->requestMemo[$memoKey])) {
+            return $this->requestMemo[$memoKey];
+        }
+
+        $quoteCacheKey = 'lp_carg_quote_' . md5(wp_json_encode($payload));
+        $cached = $this->getCachedPayload($quoteCacheKey);
+        if (is_array($cached)) {
+            $this->requestMemo[$memoKey] = $cached;
+
+            return $cached;
+        }
+
+        $correlationId = wp_generate_uuid4();
+        $response = $this->requestWithRetry(
+            'POST',
+            'rate_quote',
+            [
+                'headers' => [
+                    'Content-Type' => 'application/json',
+                ],
+                'body' => wp_json_encode($payload),
+            ],
+            $correlationId
+        );
+
+        if (is_wp_error($response)) {
+            return null;
+        }
+
+        $normalized = $this->normalizeQuoteResponse($response, $correlationId);
+        if ($normalized === null) {
+            return null;
+        }
+
+        $this->setCachedPayload($quoteCacheKey, $normalized, 5 * MINUTE_IN_SECONDS);
+        $this->requestMemo[$memoKey] = $normalized;
+
+        return $normalized;
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    public function testConnection(): array
+    {
+        $correlationId = wp_generate_uuid4();
+        $response = $this->requestWithRetry('GET', 'transport_agreements', [], $correlationId);
+
+        if (is_wp_error($response)) {
+            return [
+                'ok' => false,
+                'message' => $response->get_error_message(),
+                'correlation_id' => $correlationId,
+                'status' => 0,
+            ];
+        }
+
+        $status = (int) wp_remote_retrieve_response_code($response);
+
+        return [
+            'ok' => $status >= 200 && $status < 300,
+            'message' => $status >= 200 && $status < 300 ? 'Connection successful.' : 'Connection failed.',
+            'correlation_id' => $correlationId,
+            'status' => $status,
+        ];
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    public function getDiagnostics(): array
+    {
+        return [
+            'last_error' => get_option('lp_carg_last_error', []),
+            'cache' => [
+                'transport_agreements' => $this->cacheStatus('lp_carg_transport_agreements'),
+                'service_partners' => $this->cacheStatus('lp_carg_service_partners'),
+            ],
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $args
+     * @return array<string,mixed>|\WP_Error
+     */
+    private function requestWithRetry(string $method, string $endpointKey, array $args, string $correlationId)
+    {
+        $endpoint = $this->resolveEndpoint($endpointKey);
+        if ($endpoint === null) {
+            return new \WP_Error('lp_cargonizer_endpoint_missing', 'Cargonizer endpoint is not configured.');
+        }
+
+        $authHeaders = $this->buildAuthHeaders();
+        if ($authHeaders === null) {
+            return new \WP_Error('lp_cargonizer_auth_missing', 'Missing API credentials.');
+        }
+
+        $method = strtoupper($method);
+        $httpArgs = array_merge(
+            [
+                'timeout' => $this->resolveTimeout(),
+                'redirection' => 1,
+                'headers' => [],
+            ],
+            $args
+        );
+        $httpArgs['headers'] = array_merge($authHeaders, is_array($httpArgs['headers']) ? $httpArgs['headers'] : []);
+
+        if ($this->isCircuitOpen($endpoint)) {
+            return new \WP_Error('lp_cargonizer_circuit_open', 'Endpoint temporarily disabled by circuit breaker.');
+        }
+
+        $attempts = self::HTTP_MAX_RETRIES + 1;
+        $response = null;
+
+        for ($attempt = 1; $attempt <= $attempts; $attempt++) {
+            $response = $method === 'POST'
+                ? wp_remote_post($endpoint, $httpArgs)
+                : wp_remote_get($endpoint, $httpArgs);
+
+            if (!$this->isTransientFailure($response)) {
+                if (!is_wp_error($response)) {
+                    $this->resetCircuit($endpoint);
+                }
+
+                $this->log('info', 'Request completed', [
+                    'endpoint' => $endpoint,
+                    'method' => $method,
+                    'status' => is_wp_error($response) ? 0 : (int) wp_remote_retrieve_response_code($response),
+                    'attempt' => $attempt,
+                    'correlation_id' => $correlationId,
+                ]);
+
+                return $response;
+            }
+
+            $this->registerFailure($endpoint);
+            $this->recordLastError($response, $endpoint, $correlationId, $attempt);
+
+            $this->log('warning', 'Transient failure while calling Cargonizer endpoint', [
+                'endpoint' => $endpoint,
+                'method' => $method,
+                'attempt' => $attempt,
+                'correlation_id' => $correlationId,
+                'response' => $this->maskSecrets($response),
+            ]);
+
+            if ($attempt < $attempts) {
+                $delayMs = (int) (100 * (2 ** ($attempt - 1)) + wp_rand(10, 60));
+                usleep($delayMs * 1000);
+            }
+        }
+
+        return is_wp_error($response)
+            ? $response
+            : new \WP_Error('lp_cargonizer_http_failed', 'Cargonizer request failed after retries.');
+    }
+
+    private function resolveEndpoint(string $endpointKey): ?string
+    {
+        $baseUrl = (string) apply_filters('lp_cargonizer_api_base_url', self::DEFAULT_BASE_URL);
+        $settings = $this->settings->getSettings();
+
+        $map = [
+            'transport_agreements' => rtrim($baseUrl, '/') . '/transport_agreements.xml',
+            'service_partners' => rtrim($baseUrl, '/') . '/service_partners.xml',
+            'rate_quote' => (string) ($settings['rate_api_url'] ?? ''),
+        ];
+
+        $resolved = (string) ($map[$endpointKey] ?? '');
+
+        return $resolved !== '' ? $resolved : null;
+    }
+
+    private function resolveTimeout(): int
+    {
+        $timeout = (int) apply_filters('lp_cargonizer_api_timeout', self::DEFAULT_TIMEOUT_SECONDS);
+
+        return max(1, min(30, $timeout));
+    }
+
+    /**
+     * @return array<string,string>|null
+     */
+    private function buildAuthHeaders(): ?array
+    {
+        $apiKey = $this->settings->getApiKey();
+        $senderId = $this->settings->getSenderId();
+        if ($apiKey === '' || $senderId === '') {
+            return null;
+        }
+
+        return [
+            'X-Cargonizer-Key' => $apiKey,
+            'X-Cargonizer-Sender' => $senderId,
+        ];
+    }
+
+    /**
+     * @param array<string,mixed>|\WP_Error $response
+     */
+    private function isTransientFailure($response): bool
+    {
+        if (is_wp_error($response)) {
+            return true;
+        }
+
+        $status = (int) wp_remote_retrieve_response_code($response);
+
+        return in_array($status, [408, 425, 429, 500, 502, 503, 504], true);
+    }
+
+    /**
+     * @param array<string,mixed>|\WP_Error $response
+     */
+    private function recordLastError($response, string $endpoint, string $correlationId, int $attempt): void
+    {
+        $message = is_wp_error($response) ? $response->get_error_message() : 'HTTP ' . (int) wp_remote_retrieve_response_code($response);
+
+        update_option('lp_carg_last_error', [
+            'time' => gmdate('c'),
+            'endpoint' => $endpoint,
+            'message' => $this->maskSecrets($message),
+            'attempt' => $attempt,
+            'correlation_id' => $correlationId,
+        ], false);
+    }
+
+    /**
+     * @param array<string,mixed> $response
+     * @return array<string,mixed>|null
+     */
+    private function normalizeXmlResponse(array $response): ?array
+    {
+        $status = (int) wp_remote_retrieve_response_code($response);
+        $body = wp_remote_retrieve_body($response);
+
+        if ($status < 200 || $status >= 300 || !is_string($body) || trim($body) === '') {
+            return null;
+        }
+
+        return [
+            'status' => $status,
+            'raw' => trim($body),
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $response
+     * @return array<string,mixed>|null
+     */
+    private function normalizeQuoteResponse(array $response, string $correlationId): ?array
+    {
+        $status = (int) wp_remote_retrieve_response_code($response);
+        if ($status < 200 || $status >= 300) {
+            $this->recordLastError($response, 'rate_quote', $correlationId, 1);
+
+            return null;
+        }
+
+        $body = wp_remote_retrieve_body($response);
+        if (!is_string($body) || trim($body) === '') {
+            return null;
+        }
+
+        $decoded = json_decode($body, true);
+        if (!is_array($decoded)) {
+            return null;
+        }
+
+        $price = $decoded['price'] ?? null;
+        if (!is_numeric($price)) {
+            return null;
+        }
+
+        return [
+            'price' => (float) $price,
+            'currency' => sanitize_text_field((string) ($decoded['currency'] ?? 'NOK')),
+            'delivery_estimate' => sanitize_text_field((string) ($decoded['delivery_estimate'] ?? '')),
+            'raw' => $decoded,
+        ];
+    }
+
+    private function isCircuitOpen(string $endpoint): bool
+    {
+        $state = get_transient($this->circuitBreakerKey($endpoint));
+
+        return is_array($state) && (($state['open_until'] ?? 0) > time());
+    }
+
+    private function registerFailure(string $endpoint): void
+    {
+        $key = $this->circuitBreakerKey($endpoint);
+        $state = get_transient($key);
+        $count = is_array($state) ? (int) ($state['count'] ?? 0) : 0;
+        $count++;
+
+        $payload = ['count' => $count];
+        if ($count >= self::CIRCUIT_BREAKER_FAILURE_THRESHOLD) {
+            $payload['open_until'] = time() + self::CIRCUIT_BREAKER_TTL;
+        }
+
+        set_transient($key, $payload, self::CIRCUIT_BREAKER_TTL);
+    }
+
+    private function resetCircuit(string $endpoint): void
+    {
+        delete_transient($this->circuitBreakerKey($endpoint));
+    }
+
+    private function circuitBreakerKey(string $endpoint): string
+    {
+        return 'lp_carg_cb_' . md5($endpoint);
+    }
+
+    private function cacheStatus(string $key): array
+    {
+        $cached = get_transient($key);
+
+        return [
+            'present' => is_array($cached),
+            'size' => is_array($cached) ? strlen((string) wp_json_encode($cached)) : 0,
+        ];
+    }
+
+    /**
+     * @return array<string,mixed>|null
+     */
+    private function getCachedPayload(string $key): ?array
+    {
+        $objectCache = wp_cache_get($key, 'lp_cargonizer');
+        if (is_array($objectCache)) {
+            return $objectCache;
+        }
+
+        $transient = get_transient($key);
+        if (is_array($transient)) {
+            wp_cache_set($key, $transient, 'lp_cargonizer', 60);
+
+            return $transient;
+        }
+
+        return null;
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     */
+    private function setCachedPayload(string $key, array $payload, int $ttl): void
+    {
+        wp_cache_set($key, $payload, 'lp_cargonizer', $ttl);
+        set_transient($key, $payload, $ttl);
+    }
+
+    /**
+     * @param mixed $payload
+     * @return mixed
+     */
+    private function maskSecrets($payload)
+    {
+        if (is_array($payload)) {
+            $masked = [];
+            foreach ($payload as $key => $value) {
+                $lower = strtolower((string) $key);
+                if (strpos($lower, 'key') !== false || strpos($lower, 'token') !== false || strpos($lower, 'secret') !== false || strpos($lower, 'sender') !== false) {
+                    $masked[$key] = '***';
+                    continue;
+                }
+
+                $masked[$key] = $this->maskSecrets($value);
+            }
+
+            return $masked;
+        }
+
+        if (is_string($payload)) {
+            $apiKey = $this->settings->getApiKey();
+            $sender = $this->settings->getSenderId();
+            if ($apiKey !== '') {
+                $payload = str_replace($apiKey, '***', $payload);
+            }
+
+            if ($sender !== '') {
+                $payload = str_replace($sender, '***', $payload);
+            }
+        }
+
+        return $payload;
+    }
+
+    /**
+     * @param array<string,mixed> $context
+     */
+    private function log(string $level, string $message, array $context = []): void
+    {
+        if (!function_exists('wc_get_logger')) {
+            return;
+        }
+
+        if ($this->logger === null) {
+            $this->logger = wc_get_logger();
+        }
+
+        $context['source'] = self::LOG_SOURCE;
+        $context = $this->maskSecrets($context);
+
+        $this->logger->log($level, $message, $context);
+    }
+}
