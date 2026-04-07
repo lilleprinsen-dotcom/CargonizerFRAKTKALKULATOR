@@ -275,6 +275,13 @@ final class ShippingMethodRegistry
         $computedRate = isset($pricingComputation['rounded_rate']) && is_numeric($pricingComputation['rounded_rate'])
             ? $this->validateRate((float) $pricingComputation['rounded_rate'])
             : null;
+        $deliveryFlags = [];
+        if ((float) ($methodPricing['delivery_to_pickup_point'] ?? 0) > 0) {
+            $deliveryFlags[] = 'HENTESTED';
+        }
+        if ((float) ($methodPricing['delivery_to_home'] ?? 0) > 0) {
+            $deliveryFlags[] = 'HJEMLEVERING';
+        }
 
         return [
             'method_id' => $methodId,
@@ -293,6 +300,8 @@ final class ShippingMethodRegistry
                 'calculation' => $pricingComputation,
             ],
             'supports_sms' => $this->resolveSmsServiceId($methodConfig) !== '',
+            'delivery_flags' => $deliveryFlags,
+            'method_pricing' => $methodPricing,
         ];
     }
 

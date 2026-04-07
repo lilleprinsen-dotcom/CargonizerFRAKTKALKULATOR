@@ -268,6 +268,7 @@ final class AdminOrderController
 
                 const formatNum = (v, d = 2) => Number(v || 0).toLocaleString('no-NO', {minimumFractionDigits: d, maximumFractionDigits: d});
                 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+                const boolText = (v) => v ? 'Ja' : 'Nei';
                 const fetchJson = async (url, body) => {
                     const response = await fetch(url, { method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'}, body: new URLSearchParams(body) });
                     return response.json();
@@ -331,6 +332,28 @@ final class AdminOrderController
                     renderPackages();
                 };
 
+                const buildDebugPanel = (result, errorText) => {
+                    const estimate = result.estimate || {};
+                    const debug = result.estimate_debug || {};
+                    const selected = (debug.selected_source || {});
+                    const calc = (debug.calculation || {});
+                    const details = [];
+                    if (errorText) details.push(`<p><strong>Feil:</strong> ${esc(errorText)}</p>`);
+                    details.push(`<p><strong>Status:</strong> HTTP ${esc(estimate.http_status || 0)} · API OK: ${esc(boolText(estimate.ok === true))}</p>`);
+                    details.push(`<p><strong>Kildevalg:</strong> ${esc(selected.source || 'ukjent')} (${esc(selected.fallback_reason || result.fallback_reason || ''))}</p>`);
+                    details.push(`<p><strong>Valgt listpris:</strong> ${selected.value === null || selected.value === undefined ? 'n/a' : esc(formatNum(selected.value)) + ' kr'}</p>`);
+                    if (result.fallback_rate !== null && result.fallback_rate !== undefined) {
+                        details.push(`<p><strong>Fallback-sats:</strong> ${esc(formatNum(result.fallback_rate))} kr</p>`);
+                    }
+                    details.push(`<p><strong>Beregning:</strong> ${esc(calc.calculation_status || 'ukjent')}</p>`);
+                    if (estimate.debug) details.push(`<pre>${esc(JSON.stringify(estimate.debug, null, 2))}</pre>`);
+                    if (debug.errors) details.push(`<pre>${esc(JSON.stringify(debug.errors, null, 2))}</pre>`);
+                    if (estimate.errors) details.push(`<pre>${esc(JSON.stringify(estimate.errors, null, 2))}</pre>`);
+                    if (estimate.raw_xml) details.push(`<details><summary>Rå XML</summary><pre>${esc(estimate.raw_xml)}</pre></details>`);
+                    if (estimate.request_xml) details.push(`<details><summary>Request XML</summary><pre>${esc(estimate.request_xml)}</pre></details>`);
+                    return `<details><summary>Vis debug/detaljer</summary>${details.join('')}</details>`;
+                };
+
                 const runEstimate = async () => {
                     resultsEl.innerHTML = '<p>Henter estimater …</p>';
                     retryBtn.style.display = 'none';
@@ -356,38 +379,80 @@ final class AdminOrderController
                     try {
                         const data = await fetchJson(endpoints.run, payload);
                         if (!data.success) throw new Error((data.data && data.data.message) || 'Ukjent feil');
-                        const rows = (data.data.results || []).map((r) => {
+                        const allResults = Array.isArray(data.data.results) ? data.data.results : [];
+                        const normalized = allResults.map((r) => {
                             const estimate = r.estimate || {};
                             const req = estimate.requirements || {};
                             const errors = Array.isArray(estimate.errors) ? estimate.errors : [];
                             const errorText = errors.map((e) => e && e.message ? e.message : '').filter(Boolean).join(' · ');
+                            const calc = (r.estimate_debug || {}).calculation || {};
+                            const selected = ((r.estimate_debug || {}).selected_source || {});
+                            const statusOk = estimate.ok === true && r.rate !== null;
+                            const deliveryFlags = Array.isArray(r.delivery_flags) ? r.delivery_flags : [];
+                            const listPrice = selected && selected.value !== undefined && selected.value !== null ? Number(selected.value) : null;
+                            const fuelAmount = calc.fuel_amount !== undefined && calc.fuel_amount !== null ? Number(calc.fuel_amount) : null;
+                            return { r, req, errorText, statusOk, deliveryFlags, calc, selected, listPrice, fuelAmount };
+                        });
+                        const successful = normalized.filter((x) => x.statusOk).sort((a, b) => Number(a.r.rate || 0) - Number(b.r.rate || 0));
+                        const failed = normalized.filter((x) => !x.statusOk);
+
+                        const successfulRows = successful.map(({ r, req, errorText, calc, listPrice, fuelAmount, deliveryFlags }) => {
                             const methodOverride = state.methodOverrides[r.method_id] || {};
                             const servicepartnerOptions = Array.isArray(r.servicepartner_options) ? r.servicepartner_options : [];
                             const showServicepartner = req.servicepartner_required === true;
                             const showSms = req.sms_required === true || r.supports_sms === true;
-                            const servicepartnerSelect = showServicepartner
-                                ? `<div><label>Servicepartner:
-                                    <select data-action="set-servicepartner" data-method-id="${esc(r.method_id)}">
-                                        <option value="">Velg …</option>
-                                        ${servicepartnerOptions.map((sp) => `<option value="${esc(sp.id)}" ${String(methodOverride.service_partner || '') === String(sp.id) ? 'selected' : ''}>${esc(sp.name || sp.id)}</option>`).join('')}
-                                    </select>
-                                   </label></div>`
-                                : '';
-                            const smsToggle = showSms
-                                ? `<label><input type="checkbox" data-action="toggle-sms" data-method-id="${esc(r.method_id)}" ${methodOverride.sms_enabled ? 'checked' : ''}> SMS-varsel</label>`
-                                : '';
-                            const retryOne = (showServicepartner || showSms)
-                                ? `<button type="button" class="button button-small" data-action="retry-one" data-method-id="${esc(r.method_id)}">Prøv metode på nytt</button>`
-                                : '';
-
                             return `<tr>
                                 <td>${esc(r.title || r.method_id)}<br><small>${esc(r.method_id)}</small></td>
-                                <td>${r.rate === null ? 'Ikke tilgjengelig' : formatNum(r.rate) + ' kr'}</td>
-                                <td>${errorText ? `<span class="lp-cargonizer-error">${esc(errorText)}</span>` : ''}</td>
-                                <td>${servicepartnerSelect}${smsToggle ? `<div>${smsToggle}</div>` : ''}${retryOne}</td>
+                                <td>${esc(deliveryFlags.join(' / ') || 'n/a')}</td>
+                                <td>${listPrice === null ? 'n/a' : `${formatNum(listPrice)} kr`}<br><small>${esc((((r.estimate_debug || {}).selected_source || {}).source) || r.price_source || 'n/a')}</small></td>
+                                <td>${formatNum(calc.discount_percent || 0)}%</td>
+                                <td>${formatNum(calc.fuel_percent || 0)}%</td>
+                                <td>${fuelAmount === null ? 'n/a' : `${formatNum(fuelAmount)} kr`}</td>
+                                <td>${formatNum(calc.toll_fee || 0)} kr</td>
+                                <td>${formatNum(calc.handling_fee || 0)} kr</td>
+                                <td><strong>${r.rate === null ? 'n/a' : formatNum(r.rate) + ' kr'}</strong></td>
+                                <td>${errorText ? `<span class="lp-cargonizer-error">Advarsel</span>` : 'OK'}</td>
+                                <td>${buildDebugPanel(r, errorText)}</td>
                             </tr>`;
                         }).join('');
-                        resultsEl.innerHTML = `<table class="widefat striped"><thead><tr><th>Metode</th><th>Estimat</th><th>Feil</th><th>Tiltak</th></tr></thead><tbody>${rows || '<tr><td colspan="4">Ingen resultater.</td></tr>'}</tbody></table>`;
+
+                        const failedRows = failed.map(({ r, req, errorText }) => {
+                            const methodOverride = state.methodOverrides[r.method_id] || {};
+                            const servicepartnerOptions = Array.isArray(r.servicepartner_options) ? r.servicepartner_options : [];
+                            const showServicepartner = req.servicepartner_required === true;
+                            const showSms = req.sms_required === true || r.supports_sms === true;
+                            const missingServicepartner = showServicepartner && !String(methodOverride.service_partner || '').trim();
+                            const missingSms = req.sms_required === true && !methodOverride.sms_enabled;
+                            const servicepartnerSelect = showServicepartner ? `<div><label>Servicepartner:
+                                <select data-action="set-servicepartner" data-method-id="${esc(r.method_id)}">
+                                    <option value="">Velg …</option>
+                                    ${servicepartnerOptions.map((sp) => `<option value="${esc(sp.id)}" ${String(methodOverride.service_partner || '') === String(sp.id) ? 'selected' : ''}>${esc(sp.name || sp.id)}</option>`).join('')}
+                                </select></label></div>` : '';
+                            const smsToggle = showSms ? `<label><input type="checkbox" data-action="toggle-sms" data-method-id="${esc(r.method_id)}" ${methodOverride.sms_enabled ? 'checked' : ''}> SMS-varsel</label>` : '';
+                            const retryOne = (missingServicepartner || missingSms || showServicepartner || showSms)
+                                ? `<button type="button" class="button button-small" data-action="retry-one" data-method-id="${esc(r.method_id)}">Prøv metode på nytt</button>`
+                                : '';
+                            return `<tr>
+                                <td>${esc(r.title || r.method_id)}<br><small>${esc(r.method_id)}</small></td>
+                                <td><span class="lp-cargonizer-error">${esc(errorText || 'Ingen pris returnert')}</span></td>
+                                <td>${servicepartnerSelect}${smsToggle ? `<div>${smsToggle}</div>` : ''}${retryOne}</td>
+                                <td>${buildDebugPanel(r, errorText)}</td>
+                            </tr>`;
+                        }).join('');
+
+                        resultsEl.innerHTML = `
+                            <h5>Vellykkede metoder (sortert på laveste sluttsum)</h5>
+                            <table class="widefat striped">
+                                <thead><tr><th>Metode</th><th>Leveringsmodus</th><th>Listepris / kilde</th><th>Rabatt %</th><th>Drivstoff %</th><th>Drivstoffbeløp</th><th>Bompenger</th><th>Håndtering</th><th>Sluttpris</th><th>Status</th><th>Debug / detaljer</th></tr></thead>
+                                <tbody>${successfulRows || '<tr><td colspan="11">Ingen vellykkede metoder.</td></tr>'}</tbody>
+                            </table>
+                            <details ${failed.length ? '' : 'style="display:none;"'}>
+                                <summary>Feilede metoder (${failed.length})</summary>
+                                <table class="widefat striped">
+                                    <thead><tr><th>Metode</th><th>Status/feil</th><th>Tiltak</th><th>Debug / detaljer</th></tr></thead>
+                                    <tbody>${failedRows || '<tr><td colspan="4">Ingen feilede metoder.</td></tr>'}</tbody>
+                                </table>
+                            </details>`;
                     } catch (e) {
                         resultsEl.innerHTML = `<p class="lp-cargonizer-error">Kunne ikke hente estimat: ${esc(e.message || e)}</p>`;
                         retryBtn.style.display = '';

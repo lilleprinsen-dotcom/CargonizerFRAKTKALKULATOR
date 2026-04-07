@@ -1,4 +1,65 @@
 <div class="wrap">
+    <?php
+    $authRows = [];
+    if (is_array($connectionTest) && !empty($connectionTest['raw_xml']) && function_exists('simplexml_load_string')) {
+        $xml = @simplexml_load_string((string) $connectionTest['raw_xml']);
+        if ($xml instanceof SimpleXMLElement) {
+            $agreements = $xml->xpath('//transport_agreement');
+            if (is_array($agreements)) {
+                foreach ($agreements as $agreement) {
+                    if (!$agreement instanceof SimpleXMLElement) {
+                        continue;
+                    }
+                    $agreementId = trim((string) ($agreement->agreement_id ?? $agreement->id ?? ''));
+                    $agreementName = trim((string) ($agreement->agreement_name ?? $agreement->name ?? ''));
+                    $products = $agreement->xpath('./products/product');
+                    if (!is_array($products) || $products === []) {
+                        $products = $agreement->xpath('.//product');
+                    }
+                    if (!is_array($products) || $products === []) {
+                        $authRows[] = [
+                            'agreement_id' => $agreementId,
+                            'agreement_name' => $agreementName,
+                            'product_id' => '',
+                            'product_name' => '',
+                            'services' => [],
+                        ];
+                        continue;
+                    }
+                    foreach ($products as $product) {
+                        if (!$product instanceof SimpleXMLElement) {
+                            continue;
+                        }
+                        $services = [];
+                        $serviceNodes = $product->xpath('./services/service');
+                        if (!is_array($serviceNodes) || $serviceNodes === []) {
+                            $serviceNodes = $product->xpath('.//service');
+                        }
+                        if (is_array($serviceNodes)) {
+                            foreach ($serviceNodes as $service) {
+                                if (!$service instanceof SimpleXMLElement) {
+                                    continue;
+                                }
+                                $serviceId = trim((string) ($service->service_id ?? $service->id ?? ''));
+                                $serviceName = trim((string) ($service->service_name ?? $service->name ?? ''));
+                                if ($serviceId !== '' || $serviceName !== '') {
+                                    $services[] = trim($serviceId . ' ' . $serviceName);
+                                }
+                            }
+                        }
+                        $authRows[] = [
+                            'agreement_id' => $agreementId,
+                            'agreement_name' => $agreementName,
+                            'product_id' => trim((string) ($product->product_id ?? $product->id ?? '')),
+                            'product_name' => trim((string) ($product->product_name ?? $product->name ?? '')),
+                            'services' => $services,
+                        ];
+                    }
+                }
+            }
+        }
+    }
+    ?>
     <h1>Cargonizer</h1>
 
     <?php if (isset($_GET['updated'])) : ?>
@@ -145,13 +206,38 @@
     <?php if (is_array($connectionTest)) : ?>
         <div class="notice <?php echo esc_attr(!empty($connectionTest['ok']) ? 'notice-success' : 'notice-error'); ?>">
             <p>
-                <strong><?php echo esc_html((string) ($connectionTest['message'] ?? 'Connection test finished.')); ?></strong><br />
+                <strong><?php echo esc_html((string) ($connectionTest['message'] ?? 'Autentiseringstest fullført.')); ?></strong><br />
                 Status: <?php echo esc_html((string) ($connectionTest['status'] ?? 0)); ?>,
                 Correlation ID: <code><?php echo esc_html((string) ($connectionTest['correlation_id'] ?? 'n/a')); ?></code>
             </p>
+            <?php if (!empty($authRows)) : ?>
+                <h3>Resultater fra autentiseringstest (transportavtaler/produkter/tjenester)</h3>
+                <table class="widefat striped">
+                    <thead>
+                        <tr>
+                            <th>Transportavtale-ID</th>
+                            <th>Transportavtale</th>
+                            <th>Produkt-ID</th>
+                            <th>Produkt</th>
+                            <th>Tjenester</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($authRows as $row) : ?>
+                            <tr>
+                                <td><code><?php echo esc_html((string) ($row['agreement_id'] ?? '')); ?></code></td>
+                                <td><?php echo esc_html((string) ($row['agreement_name'] ?? '')); ?></td>
+                                <td><code><?php echo esc_html((string) ($row['product_id'] ?? '')); ?></code></td>
+                                <td><?php echo esc_html((string) ($row['product_name'] ?? '')); ?></td>
+                                <td><?php echo esc_html(!empty($row['services']) ? implode(', ', array_map('strval', (array) $row['services'])) : 'Ingen'); ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            <?php endif; ?>
             <?php if (!empty($connectionTest['raw_xml'])) : ?>
                 <details>
-                    <summary>Raw XML response</summary>
+                    <summary>Rå XML-respons</summary>
                     <pre style="max-height: 320px; overflow:auto;"><?php echo esc_html((string) $connectionTest['raw_xml']); ?></pre>
                 </details>
             <?php endif; ?>
