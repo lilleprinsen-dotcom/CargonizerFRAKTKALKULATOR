@@ -65,6 +65,10 @@ final class HooksRegistrar
         add_action('admin_post_lp_cargonizer_test_connection', [$this->adminPages, 'handleConnectionTest']);
 
         add_action('wp_ajax_lp_cargonizer_fetch_methods', [$this->ajaxController, 'fetchMethods']);
+        add_action('wp_ajax_lp_cargonizer_get_order_estimate_data', [$this->ajaxController, 'getOrderEstimateData']);
+        add_action('wp_ajax_lp_cargonizer_get_shipping_options', [$this->ajaxController, 'getShippingOptions']);
+        add_action('wp_ajax_lp_cargonizer_run_bulk_estimate', [$this->ajaxController, 'runBulkEstimate']);
+        add_action('wp_ajax_lp_cargonizer_get_servicepartner_options', [$this->ajaxController, 'getServicepartnerOptions']);
 
         add_action('rest_api_init', [$this->restController, 'registerRoutes']);
 
@@ -75,7 +79,9 @@ final class HooksRegistrar
 
         $this->orderHooksAdapter->registerOrderColumnHooks();
 
+        add_action('woocommerce_admin_order_data_after_order_details', [$this->adminOrderController, 'renderOrderEstimatorButton']);
         add_action('woocommerce_admin_order_data_after_shipping_address', [$this->adminOrderController, 'renderOrderShipmentPanel']);
+        add_action('admin_footer', [$this->adminOrderController, 'renderOrderEstimatorModal']);
         add_action(ShippingMethodRegistry::ACTION_REFRESH_METHODS, [$this->shippingMethodRegistry, 'runRefreshMethodsJob']);
         add_action(ShippingMethodRegistry::ACTION_RUN_BULK_ESTIMATE, [$this->shippingMethodRegistry, 'runBulkEstimateJob']);
     }
