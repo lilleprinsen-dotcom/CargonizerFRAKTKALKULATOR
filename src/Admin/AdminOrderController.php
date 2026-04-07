@@ -43,10 +43,59 @@ final class AdminOrderController
         echo ' data-get-shipping-options-nonce="' . esc_attr($nonces['get_shipping_options']) . '"';
         echo ' data-run-bulk-estimate-nonce="' . esc_attr($nonces['run_bulk_estimate']) . '"';
         echo ' data-get-servicepartner-options-nonce="' . esc_attr($nonces['get_servicepartner_options']) . '">';
-        echo '<div class="lp-cargonizer-estimator-modal__content">';
+        echo '<div class="lp-cargonizer-estimator-modal__backdrop" data-action="close"></div>';
+        echo '<div class="lp-cargonizer-estimator-modal__content" role="dialog" aria-modal="true" aria-label="' . esc_attr__('Cargonizer fraktestimat', 'lp-cargonizer') . '">';
+        echo '<div class="lp-cargonizer-estimator-modal__header">';
         echo '<h3>' . esc_html__('Cargonizer fraktestimat', 'lp-cargonizer') . '</h3>';
-        echo '<div class="lp-cargonizer-estimator-results"></div>';
+        echo '<button type="button" class="button-link" data-action="close" aria-label="' . esc_attr__('Lukk', 'lp-cargonizer') . '">✕</button>';
+        echo '</div>';
+
+        echo '<div class="lp-cargonizer-estimator-layout">';
+        echo '<div class="lp-cargonizer-estimator-grid">';
+        echo '<section><h4>' . esc_html__('Ordresammendrag', 'lp-cargonizer') . '</h4><div class="lp-cargonizer-order-summary"></div></section>';
+        echo '<section><h4>' . esc_html__('Mottaker', 'lp-cargonizer') . '</h4><div class="lp-cargonizer-recipient-summary"></div></section>';
+        echo '</div>';
+
+        echo '<section><h4>' . esc_html__('Ordrelinjer', 'lp-cargonizer') . '</h4><div class="lp-cargonizer-order-lines"></div></section>';
+
+        echo '<section>';
+        echo '<h4>' . esc_html__('Kolli / Pakker', 'lp-cargonizer') . '</h4>';
+        echo '<div class="lp-cargonizer-colli-controls">';
+        echo '<button type="button" class="button" data-action="add-package">' . esc_html__('Legg til pakke', 'lp-cargonizer') . '</button>';
+        echo '<span class="description" data-role="colli-validation"></span>';
+        echo '</div>';
+        echo '<table class="widefat striped"><thead><tr>';
+        echo '<th>' . esc_html__('Beskrivelse', 'lp-cargonizer') . '</th>';
+        echo '<th>' . esc_html__('L (cm)', 'lp-cargonizer') . '</th>';
+        echo '<th>' . esc_html__('B (cm)', 'lp-cargonizer') . '</th>';
+        echo '<th>' . esc_html__('H (cm)', 'lp-cargonizer') . '</th>';
+        echo '<th>' . esc_html__('Vekt (kg)', 'lp-cargonizer') . '</th>';
+        echo '<th>' . esc_html__('Volum (m³)', 'lp-cargonizer') . '</th>';
+        echo '<th></th>';
+        echo '</tr></thead><tbody class="lp-cargonizer-colli-body"></tbody></table>';
+        echo '</section>';
+
+        echo '<section>';
+        echo '<h4>' . esc_html__('Fraktmetoder', 'lp-cargonizer') . '</h4>';
+        echo '<div class="lp-cargonizer-method-actions">';
+        echo '<button type="button" class="button button-small" data-action="select-all-methods">' . esc_html__('Velg alle', 'lp-cargonizer') . '</button>';
+        echo '<button type="button" class="button button-small" data-action="clear-all-methods">' . esc_html__('Fjern alle', 'lp-cargonizer') . '</button>';
+        echo '</div>';
+        echo '<div class="lp-cargonizer-method-list"></div>';
+        echo '</section>';
+
+        echo '<section><h4>' . esc_html__('Resultater', 'lp-cargonizer') . '</h4><div class="lp-cargonizer-estimator-results"></div></section>';
+        echo '</div>';
+
+        echo '<div class="lp-cargonizer-estimator-modal__footer">';
+        echo '<button type="button" class="button" data-action="close">' . esc_html__('Lukk', 'lp-cargonizer') . '</button>';
+        echo '<button type="button" class="button button-primary" data-action="run-estimate">' . esc_html__('Kjør estimat', 'lp-cargonizer') . '</button>';
+        echo '<button type="button" class="button" data-action="retry" style="display:none;">' . esc_html__('Prøv igjen', 'lp-cargonizer') . '</button>';
+        echo '</div>';
+
         echo '</div></div>';
+
+        $this->renderEstimatorAssets();
     }
 
     public function registerLegacyOrderColumns(array $columns): array
@@ -176,5 +225,205 @@ final class AdminOrderController
         }
 
         return false;
+    }
+
+    private function renderEstimatorAssets(): void
+    {
+        ?>
+        <style>
+            .lp-cargonizer-estimator-modal { position: fixed; inset: 0; z-index: 100000; }
+            .lp-cargonizer-estimator-modal__backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.45); }
+            .lp-cargonizer-estimator-modal__content { position: relative; width: min(1100px, 94vw); max-height: 92vh; overflow: auto; margin: 4vh auto; background: #fff; border-radius: 4px; padding: 16px; }
+            .lp-cargonizer-estimator-modal__header, .lp-cargonizer-estimator-modal__footer { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+            .lp-cargonizer-estimator-layout { display: grid; gap: 16px; }
+            .lp-cargonizer-estimator-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+            .lp-cargonizer-method-list { max-height: 180px; overflow: auto; border: 1px solid #ddd; padding: 8px; }
+            .lp-cargonizer-method-list label { display: block; margin-bottom: 4px; }
+            .lp-cargonizer-colli-body input[type="number"], .lp-cargonizer-colli-body input[type="text"] { width: 100%; }
+            .lp-cargonizer-colli-controls { display:flex; align-items:center; justify-content: space-between; margin-bottom:8px; }
+            .lp-cargonizer-error { color: #b32d2e; }
+            @media (max-width: 900px) { .lp-cargonizer-estimator-grid { grid-template-columns: 1fr; } }
+        </style>
+        <script>
+            (function () {
+                const modal = document.getElementById('lp-cargonizer-estimator-modal');
+                const openBtn = document.getElementById('lp-cargonizer-open-estimator');
+                if (!modal || !openBtn) return;
+
+                const state = { orderData: null, methods: [], packages: [], selectedMethods: new Set(), lastPayload: null };
+                const endpoints = {
+                    orderData: '<?php echo esc_js(admin_url('admin-ajax.php')); ?>?action=lp_cargonizer_get_order_estimate_data',
+                    methods: '<?php echo esc_js(admin_url('admin-ajax.php')); ?>?action=lp_cargonizer_get_shipping_options',
+                    run: '<?php echo esc_js(admin_url('admin-ajax.php')); ?>?action=lp_cargonizer_run_bulk_estimate'
+                };
+                const summaryEl = modal.querySelector('.lp-cargonizer-order-summary');
+                const recipientEl = modal.querySelector('.lp-cargonizer-recipient-summary');
+                const linesEl = modal.querySelector('.lp-cargonizer-order-lines');
+                const colliBody = modal.querySelector('.lp-cargonizer-colli-body');
+                const colliValidation = modal.querySelector('[data-role="colli-validation"]');
+                const methodsEl = modal.querySelector('.lp-cargonizer-method-list');
+                const resultsEl = modal.querySelector('.lp-cargonizer-estimator-results');
+                const retryBtn = modal.querySelector('[data-action="retry"]');
+
+                const formatNum = (v, d = 2) => Number(v || 0).toLocaleString('no-NO', {minimumFractionDigits: d, maximumFractionDigits: d});
+                const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+                const fetchJson = async (url, body) => {
+                    const response = await fetch(url, { method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'}, body: new URLSearchParams(body) });
+                    return response.json();
+                };
+
+                const renderOrderSummary = (o) => {
+                    summaryEl.innerHTML = `<p><strong>Ordrenummer:</strong> #${esc(o.order_number || o.order_id)}</p><p><strong>Dato:</strong> ${esc(o.order_date || '')}</p><p><strong>Total:</strong> ${esc(o.total_formatted || '')}</p>`;
+                };
+
+                const renderRecipient = (r) => {
+                    recipientEl.innerHTML = `<p><strong>Navn:</strong> ${esc(r.name || '')}</p><p><strong>Adresse:</strong> ${esc(r.address || '')}<br>${esc(r.postal || '')}</p><p><strong>E-post:</strong> ${esc(r.email || '')}</p><p><strong>Telefon:</strong> ${esc(r.phone || '')}</p>`;
+                };
+
+                const renderLines = (lines) => {
+                    if (!Array.isArray(lines) || !lines.length) { linesEl.innerHTML = '<p>Ingen ordrelinjer.</p>'; return; }
+                    linesEl.innerHTML = `<table class="widefat striped"><thead><tr><th>Produkt</th><th>Antall</th><th>Total</th></tr></thead><tbody>${lines.map((l) => `<tr><td>${esc(l.name)}</td><td>${esc(l.quantity)}</td><td>${esc(l.total)}</td></tr>`).join('')}</tbody></table>`;
+                };
+
+                const newPackage = (name = 'Pakke') => ({ description: name, length: 10, width: 10, height: 10, weight: 1 });
+                const packageVolume = (p) => ((Number(p.length)||0) * (Number(p.width)||0) * (Number(p.height)||0)) / 1000000;
+                const totalWeight = () => state.packages.reduce((sum, p) => sum + (Number(p.weight) || 0), 0);
+                const totalVolume = () => state.packages.reduce((sum, p) => sum + packageVolume(p), 0);
+
+                const validatePackages = () => {
+                    if (!state.packages.length) {
+                        colliValidation.textContent = 'Minst én pakke er påkrevd.';
+                        colliValidation.classList.add('lp-cargonizer-error');
+                        return false;
+                    }
+                    const hasInvalid = state.packages.some((p) => [p.length, p.width, p.height, p.weight].some((v) => Number(v) <= 0 || Number.isNaN(Number(v))));
+                    if (hasInvalid) {
+                        colliValidation.textContent = 'Alle kolli-mål og vekt må være numeriske verdier større enn 0.';
+                        colliValidation.classList.add('lp-cargonizer-error');
+                        return false;
+                    }
+                    colliValidation.textContent = `Antall kolli: ${state.packages.length} · Totalvolum: ${formatNum(totalVolume(), 4)} m³`;
+                    colliValidation.classList.remove('lp-cargonizer-error');
+                    return true;
+                };
+
+                const renderPackages = () => {
+                    colliBody.innerHTML = state.packages.map((p, i) => `<tr data-index="${i}"><td><input type="text" data-key="description" value="${esc(p.description)}"></td><td><input type="number" min="0.01" step="0.01" data-key="length" value="${esc(p.length)}"></td><td><input type="number" min="0.01" step="0.01" data-key="width" value="${esc(p.width)}"></td><td><input type="number" min="0.01" step="0.01" data-key="height" value="${esc(p.height)}"></td><td><input type="number" min="0.01" step="0.01" data-key="weight" value="${esc(p.weight)}"></td><td>${formatNum(packageVolume(p),4)}</td><td><button type="button" class="button-link-delete" data-action="remove-package">Fjern</button></td></tr>`).join('');
+                    validatePackages();
+                };
+
+                const renderMethods = (methods) => {
+                    const enabled = (methods || []).filter((m) => m && m.enabled !== false);
+                    state.methods = enabled;
+                    if (!state.selectedMethods.size) enabled.forEach((m) => state.selectedMethods.add(m.method_id));
+                    methodsEl.innerHTML = enabled.map((m) => `<label><input type="checkbox" data-method="${esc(m.method_id)}" ${state.selectedMethods.has(m.method_id) ? 'checked' : ''}> ${esc(m.title || m.method_id)}</label>`).join('') || '<p>Ingen aktive Cargonizer-metoder funnet.</p>';
+                };
+
+                const buildDefaultPackages = (lines) => {
+                    const defaults = [];
+                    (lines || []).forEach((line) => {
+                        if (!line.separate_package) return;
+                        const q = Math.max(1, Number(line.quantity) || 1);
+                        for (let i = 0; i < q; i += 1) defaults.push(newPackage(line.separate_package_name || line.name || 'Pakke'));
+                    });
+                    state.packages = defaults.length ? defaults : [newPackage()];
+                    renderPackages();
+                };
+
+                const runEstimate = async () => {
+                    resultsEl.innerHTML = '<p>Henter estimater …</p>';
+                    retryBtn.style.display = 'none';
+                    if (!validatePackages()) {
+                        resultsEl.innerHTML = '<p class="lp-cargonizer-error">Kolli-oppsettet må rettes før estimat kan kjøres.</p>';
+                        return;
+                    }
+                    const methodIds = Array.from(state.selectedMethods);
+                    if (!methodIds.length) {
+                        resultsEl.innerHTML = '<p class="lp-cargonizer-error">Velg minst én fraktmetode.</p>';
+                        return;
+                    }
+
+                    const payload = {
+                        nonce: modal.dataset.runBulkEstimateNonce,
+                        order_id: modal.dataset.orderId,
+                        method_ids: JSON.stringify(methodIds),
+                        packages: JSON.stringify(state.packages)
+                    };
+                    state.lastPayload = payload;
+
+                    try {
+                        const data = await fetchJson(endpoints.run, payload);
+                        if (!data.success) throw new Error((data.data && data.data.message) || 'Ukjent feil');
+                        const rows = (data.data.results || []).map((r) => `<tr><td>${esc(r.title || r.method_id)}</td><td>${r.rate === null ? 'Ikke tilgjengelig' : formatNum(r.rate) + ' kr'}</td></tr>`).join('');
+                        resultsEl.innerHTML = `<table class="widefat striped"><thead><tr><th>Metode</th><th>Estimat</th></tr></thead><tbody>${rows || '<tr><td colspan="2">Ingen resultater.</td></tr>'}</tbody></table>`;
+                    } catch (e) {
+                        resultsEl.innerHTML = `<p class="lp-cargonizer-error">Kunne ikke hente estimat: ${esc(e.message || e)}</p>`;
+                        retryBtn.style.display = '';
+                    }
+                };
+
+                const loadModalData = async () => {
+                    resultsEl.innerHTML = '<p>Laster ordredata …</p>';
+                    const [orderDataRes, methodsRes] = await Promise.all([
+                        fetchJson(endpoints.orderData, { nonce: modal.dataset.getOrderEstimateDataNonce, order_id: modal.dataset.orderId }),
+                        fetchJson(endpoints.methods, { nonce: modal.dataset.getShippingOptionsNonce, order_id: modal.dataset.orderId })
+                    ]);
+                    if (!orderDataRes.success) throw new Error((orderDataRes.data && orderDataRes.data.message) || 'Kunne ikke laste ordredata.');
+                    if (!methodsRes.success) throw new Error((methodsRes.data && methodsRes.data.message) || 'Kunne ikke laste fraktmetoder.');
+
+                    state.orderData = orderDataRes.data;
+                    renderOrderSummary(orderDataRes.data.order_summary || {});
+                    renderRecipient(orderDataRes.data.recipient || {});
+                    renderLines(orderDataRes.data.lines || []);
+                    buildDefaultPackages(orderDataRes.data.lines || []);
+                    renderMethods(methodsRes.data.methods || []);
+                    resultsEl.innerHTML = '<p>Klar for estimat.</p>';
+                };
+
+                openBtn.addEventListener('click', async () => {
+                    modal.style.display = 'block';
+                    try { await loadModalData(); } catch (e) { resultsEl.innerHTML = `<p class="lp-cargonizer-error">${esc(e.message || e)}</p>`; retryBtn.style.display = ''; }
+                });
+
+                modal.addEventListener('click', (event) => {
+                    const actionTarget = event.target.closest('[data-action]');
+                    if (!actionTarget) return;
+                    const action = actionTarget.dataset.action;
+                    if (action === 'close') modal.style.display = 'none';
+                    if (action === 'add-package') { state.packages.push(newPackage()); renderPackages(); }
+                    if (action === 'remove-package') {
+                        const row = event.target.closest('tr');
+                        const idx = Number(row && row.dataset.index);
+                        if (!Number.isNaN(idx)) { state.packages.splice(idx, 1); renderPackages(); }
+                    }
+                    if (action === 'select-all-methods') { state.methods.forEach((m) => state.selectedMethods.add(m.method_id)); renderMethods(state.methods); }
+                    if (action === 'clear-all-methods') { state.selectedMethods.clear(); renderMethods(state.methods); }
+                    if (action === 'run-estimate') runEstimate();
+                    if (action === 'retry' && state.lastPayload) runEstimate();
+                });
+
+                colliBody.addEventListener('input', (event) => {
+                    const input = event.target;
+                    const row = input.closest('tr');
+                    if (!row) return;
+                    const idx = Number(row.dataset.index);
+                    const key = input.dataset.key;
+                    if (Number.isNaN(idx) || !key || !state.packages[idx]) return;
+                    state.packages[idx][key] = input.value;
+                    if (['length', 'width', 'height', 'weight'].includes(key)) {
+                        row.children[5].textContent = formatNum(packageVolume(state.packages[idx]), 4);
+                    }
+                    validatePackages();
+                });
+
+                methodsEl.addEventListener('change', (event) => {
+                    const input = event.target;
+                    if (!input || !input.dataset || !input.dataset.method) return;
+                    if (input.checked) state.selectedMethods.add(input.dataset.method);
+                    else state.selectedMethods.delete(input.dataset.method);
+                });
+            })();
+        </script>
+        <?php
     }
 }

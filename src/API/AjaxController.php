@@ -59,11 +59,50 @@ final class AjaxController
             'weight' => 0.0,
         ];
 
+        $lineItems = [];
+        foreach ($order->get_items() as $item) {
+            if (!$item instanceof \WC_Order_Item_Product) {
+                continue;
+            }
+
+            $product = $item->get_product();
+            $lineItems[] = [
+                'name' => (string) $item->get_name(),
+                'quantity' => (int) $item->get_quantity(),
+                'total' => wc_price((float) $item->get_total(), ['currency' => $order->get_currency()]),
+                'separate_package' => $product instanceof \WC_Product && $product->get_meta('_wildrobot_separate_package_for_product') === 'yes',
+                'separate_package_name' => $product instanceof \WC_Product ? (string) $product->get_meta('_wildrobot_separate_package_for_product_name') : '',
+            ];
+        }
+
+        $recipientName = trim((string) $order->get_formatted_shipping_full_name());
+        if ($recipientName === '') {
+            $recipientName = trim((string) $order->get_formatted_billing_full_name());
+        }
+
+        $addressLine1 = trim((string) $order->get_shipping_address_1());
+        $addressLine2 = trim((string) $order->get_shipping_address_2());
+        $postal = trim((string) $order->get_shipping_postcode() . ' ' . (string) $order->get_shipping_city());
+
         wp_send_json_success([
             'order_id' => $order->get_id(),
             'shipping_total' => $shippingTotal,
             'package' => $package,
             'methods' => $this->shippingRegistry->all(),
+            'order_summary' => [
+                'order_id' => $order->get_id(),
+                'order_number' => $order->get_order_number(),
+                'order_date' => $order->get_date_created() ? $order->get_date_created()->date_i18n('d.m.Y H:i') : '',
+                'total_formatted' => wc_price((float) $order->get_total(), ['currency' => $order->get_currency()]),
+            ],
+            'recipient' => [
+                'name' => $recipientName,
+                'address' => trim($addressLine1 . ($addressLine2 !== '' ? ', ' . $addressLine2 : '')),
+                'postal' => $postal,
+                'email' => (string) $order->get_billing_email(),
+                'phone' => (string) $order->get_billing_phone(),
+            ],
+            'lines' => $lineItems,
         ]);
     }
 
@@ -86,6 +125,20 @@ final class AjaxController
         }
 
         $methods = $this->shippingRegistry->all();
+
+        $selectedMethodIds = isset($_REQUEST['method_ids']) ? json_decode(wp_unslash((string) $_REQUEST['method_ids']), true) : []; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+        $selectedMethodIds = is_array($selectedMethodIds) ? array_map('sanitize_text_field', $selectedMethodIds) : [];
+
+        if ($selectedMethodIds !== []) {
+            $methods = array_values(array_filter($methods, static function ($method) use ($selectedMethodIds): bool {
+                if (!is_array($method)) {
+                    return false;
+                }
+
+                return in_array((string) ($method['method_id'] ?? ''), $selectedMethodIds, true);
+            }));
+        }
+
         $package = [
             'destination' => [
                 'country' => (string) $order->get_shipping_country(),
@@ -97,6 +150,41 @@ final class AjaxController
             'contents_cost' => (float) $order->get_subtotal(),
             'weight' => 0.0,
         ];
+
+        $customPackages = isset($_REQUEST['packages']) ? json_decode(wp_unslash((string) $_REQUEST['packages']), true) : []; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+        if (is_array($customPackages) && $customPackages !== []) {
+            $normalized = [];
+            $totalWeight = 0.0;
+            foreach ($customPackages as $item) {
+                if (!is_array($item)) {
+                    continue;
+                }
+
+                $length = max(0.0, (float) ($item['length'] ?? 0));
+                $width = max(0.0, (float) ($item['width'] ?? 0));
+                $height = max(0.0, (float) ($item['height'] ?? 0));
+                $weight = max(0.0, (float) ($item['weight'] ?? 0));
+
+                if ($length <= 0 || $width <= 0 || $height <= 0 || $weight <= 0) {
+                    continue;
+                }
+
+                $normalized[] = [
+                    'description' => sanitize_text_field((string) ($item['description'] ?? 'Pakke')),
+                    'length' => $length,
+                    'width' => $width,
+                    'height' => $height,
+                    'weight' => $weight,
+                    'volume' => ($length * $width * $height) / 1000000,
+                ];
+                $totalWeight += $weight;
+            }
+
+            if ($normalized !== []) {
+                $package['weight'] = $totalWeight;
+                $package['colli'] = $normalized;
+            }
+        }
 
         $jobs = [];
         foreach ($methods as $method) {
@@ -126,6 +214,7 @@ final class AjaxController
 
             $results[] = [
                 'method_id' => (string) ($method['method_id'] ?? ''),
+                'title' => (string) ($method['title'] ?? ($method['method_id'] ?? '')),
                 'rate' => $this->shippingRegistry->resolveRate($method, $package),
             ];
         }
