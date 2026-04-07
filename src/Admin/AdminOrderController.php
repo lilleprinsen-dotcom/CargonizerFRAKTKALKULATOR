@@ -321,7 +321,19 @@ final class AdminOrderController
                     methodsEl.innerHTML = enabled.map((m) => `<label><input type="checkbox" data-method="${esc(m.method_id)}" ${state.selectedMethods.has(m.method_id) ? 'checked' : ''}> ${esc(m.title || m.method_id)}</label>`).join('') || '<p>Ingen aktive Cargonizer-metoder funnet.</p>';
                 };
 
-                const buildDefaultPackages = (lines) => {
+                const buildDefaultPackages = (lines, packages) => {
+                    if (Array.isArray(packages) && packages.length) {
+                        state.packages = packages.map((pkg) => ({
+                            description: pkg.description || 'Pakke',
+                            length: Number(pkg.length) || 0,
+                            width: Number(pkg.width) || 0,
+                            height: Number(pkg.height) || 0,
+                            weight: Number(pkg.weight) || 0,
+                        }));
+                        renderPackages();
+                        return;
+                    }
+
                     const defaults = [];
                     (lines || []).forEach((line) => {
                         if (!line.separate_package) return;
@@ -478,7 +490,7 @@ final class AdminOrderController
                     renderOrderSummary(orderDataRes.data.order_summary || {});
                     renderRecipient(orderDataRes.data.recipient || {});
                     renderLines(orderDataRes.data.lines || []);
-                    buildDefaultPackages(orderDataRes.data.lines || []);
+                    buildDefaultPackages(orderDataRes.data.lines || [], orderDataRes.data.packages || []);
                     renderMethods(methodsRes.data.methods || []);
                     resultsEl.innerHTML = '<p>Klar for estimat.</p>';
                 };

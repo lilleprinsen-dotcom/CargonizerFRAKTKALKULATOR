@@ -60,17 +60,44 @@ final class AjaxController
         ];
 
         $lineItems = [];
+        $defaultPackages = [];
         foreach ($order->get_items() as $item) {
             if (!$item instanceof \WC_Order_Item_Product) {
                 continue;
             }
 
             $product = $item->get_product();
+            $separatePackage = $product instanceof \WC_Product && $product->get_meta('_wildrobot_separate_package_for_product') === 'yes';
+            if ($separatePackage) {
+                $packageName = trim((string) $product->get_meta('_wildrobot_separate_package_for_product_name'));
+                if ($packageName === '') {
+                    $packageName = (string) $item->get_name();
+                }
+
+                $weight = (float) $product->get_meta('_weight');
+                $length = (float) $product->get_meta('_length');
+                $width = (float) $product->get_meta('_width');
+                $height = (float) $product->get_meta('_height');
+                $quantity = max(1, (int) $item->get_quantity());
+
+                if ($weight > 0 && $length > 0 && $width > 0 && $height > 0) {
+                    for ($i = 0; $i < $quantity; $i++) {
+                        $defaultPackages[] = [
+                            'description' => $packageName,
+                            'length' => $length,
+                            'width' => $width,
+                            'height' => $height,
+                            'weight' => $weight,
+                        ];
+                    }
+                }
+            }
+
             $lineItems[] = [
                 'name' => (string) $item->get_name(),
                 'quantity' => (int) $item->get_quantity(),
                 'total' => wc_price((float) $item->get_total(), ['currency' => $order->get_currency()]),
-                'separate_package' => $product instanceof \WC_Product && $product->get_meta('_wildrobot_separate_package_for_product') === 'yes',
+                'separate_package' => $separatePackage,
                 'separate_package_name' => $product instanceof \WC_Product ? (string) $product->get_meta('_wildrobot_separate_package_for_product_name') : '',
             ];
         }
@@ -102,6 +129,7 @@ final class AjaxController
                 'email' => (string) $order->get_billing_email(),
                 'phone' => (string) $order->get_billing_phone(),
             ],
+            'packages' => $defaultPackages,
             'lines' => $lineItems,
         ]);
     }
