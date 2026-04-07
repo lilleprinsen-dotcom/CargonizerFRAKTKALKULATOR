@@ -1,5 +1,7 @@
 # Staged rollout checklist
 
+Reference: `docs/checkout-modernization-plan.md` for the full six-phase modernization program.
+
 ## 1) Staging soak
 - Deploy candidate to staging with production-like WooCommerce and payment gateways.
 - Run full test pyramid and manual checkout validation for at least 24h soak.
