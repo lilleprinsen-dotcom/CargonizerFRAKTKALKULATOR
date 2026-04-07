@@ -2,9 +2,12 @@
 
 namespace Lilleprinsen\Cargonizer\API;
 
+use Lilleprinsen\Cargonizer\Domain\Contracts\RateProviderInterface;
+use Lilleprinsen\Cargonizer\Domain\DTO\RateQuote;
+use Lilleprinsen\Cargonizer\Domain\DTO\RateQuoteRequest;
 use Lilleprinsen\Cargonizer\Infrastructure\SettingsService;
 
-final class CargonizerClient
+final class CargonizerClient implements RateProviderInterface
 {
     private const DEFAULT_BASE_URL = 'https://api.cargonizer.no';
     private const DEFAULT_TIMEOUT_SECONDS = 4;
@@ -82,15 +85,17 @@ final class CargonizerClient
         return $this->requestMemo[$cacheKey] = $normalized;
     }
 
-    /**
-     * @param array<string,mixed> $payload
-     * @return array<string,mixed>|null
-     */
-    public function fetchRateQuote(array $payload): ?array
+
+    public function getRateQuote(RateQuoteRequest $request): ?RateQuote
     {
+        $payload = $request->toArray();
         $memoKey = 'quote:' . md5(wp_json_encode($payload));
         if (isset($this->requestMemo[$memoKey]) && is_array($this->requestMemo[$memoKey])) {
-            return $this->requestMemo[$memoKey];
+            $cachedQuote = $this->requestMemo[$memoKey];
+
+            return isset($cachedQuote['price']) && is_numeric($cachedQuote['price'])
+                ? new RateQuote((float) $cachedQuote['price'], (string) ($cachedQuote['currency'] ?? 'NOK'))
+                : null;
         }
 
         $quoteCacheKey = 'lp_carg_quote_' . md5(wp_json_encode($payload));
@@ -98,10 +103,14 @@ final class CargonizerClient
         if (is_array($cached)) {
             $this->requestMemo[$memoKey] = $cached;
 
-            return $cached;
+            return isset($cached['price']) && is_numeric($cached['price'])
+                ? new RateQuote((float) $cached['price'], (string) ($cached['currency'] ?? 'NOK'))
+                : null;
         }
 
         $correlationId = wp_generate_uuid4();
+        do_action('lp_cargonizer_before_remote_quote_fetch', $payload, $correlationId, $this);
+
         $response = $this->requestWithRetry(
             'POST',
             'rate_quote',
@@ -115,18 +124,45 @@ final class CargonizerClient
         );
 
         if (is_wp_error($response)) {
+            do_action('lp_cargonizer_after_remote_quote_fetch', null, $payload, $correlationId, $this, $response);
+
             return null;
         }
 
         $normalized = $this->normalizeQuoteResponse($response, $correlationId);
         if ($normalized === null) {
+            do_action('lp_cargonizer_after_remote_quote_fetch', null, $payload, $correlationId, $this, null);
+
             return null;
         }
 
         $this->setCachedPayload($quoteCacheKey, $normalized, 5 * MINUTE_IN_SECONDS);
         $this->requestMemo[$memoKey] = $normalized;
 
-        return $normalized;
+        $quote = isset($normalized['price']) && is_numeric($normalized['price'])
+            ? new RateQuote((float) $normalized['price'], (string) ($normalized['currency'] ?? 'NOK'))
+            : null;
+
+        do_action('lp_cargonizer_after_remote_quote_fetch', $quote, $payload, $correlationId, $this, null);
+
+        return $quote;
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     * @return array<string,mixed>|null
+     */
+    public function fetchRateQuote(array $payload): ?array
+    {
+        $request = new RateQuoteRequest(
+            (string) ($payload['agreement_id'] ?? ''),
+            (string) ($payload['product_id'] ?? ''),
+            is_array($payload['package'] ?? null) ? $payload['package'] : []
+        );
+
+        $quote = $this->getRateQuote($request);
+
+        return $quote !== null ? $quote->toArray() : null;
     }
 
     /**

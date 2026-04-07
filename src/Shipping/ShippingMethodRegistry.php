@@ -3,6 +3,8 @@
 namespace Lilleprinsen\Cargonizer\Shipping;
 
 use Lilleprinsen\Cargonizer\API\CargonizerClient;
+use Lilleprinsen\Cargonizer\Domain\Contracts\RateProviderInterface;
+use Lilleprinsen\Cargonizer\Domain\DTO\RateQuoteRequest;
 use Lilleprinsen\Cargonizer\Infrastructure\SettingsService;
 use Lilleprinsen\Cargonizer\Shipping\Methods\CargonizerShippingMethod;
 
@@ -13,15 +15,17 @@ final class ShippingMethodRegistry
 
     private SettingsService $settings;
     private CargonizerClient $client;
+    private RateProviderInterface $rateProvider;
     private RateCalculator $rateCalculator;
 
     /** @var array<string,float|null> */
     private array $requestRateMemo = [];
 
-    public function __construct(SettingsService $settings, CargonizerClient $client, RateCalculator $rateCalculator)
+    public function __construct(SettingsService $settings, CargonizerClient $client, RateProviderInterface $rateProvider, RateCalculator $rateCalculator)
     {
         $this->settings = $settings;
         $this->client = $client;
+        $this->rateProvider = $rateProvider;
         $this->rateCalculator = $rateCalculator;
     }
 
@@ -165,15 +169,15 @@ final class ShippingMethodRegistry
             return $validated;
         }
 
-        $quote = $this->client->fetchRateQuote([
-            'agreement_id' => (string) ($methodConfig['agreement_id'] ?? ''),
-            'product_id' => (string) ($methodConfig['product_id'] ?? ''),
-            'package' => $this->compactPackage($package),
-        ]);
+        $quoteRequest = new RateQuoteRequest(
+            (string) ($methodConfig['agreement_id'] ?? ''),
+            (string) ($methodConfig['product_id'] ?? ''),
+            $this->compactPackage($package)
+        );
 
-        $rawRate = is_array($quote) && isset($quote['price']) && is_numeric($quote['price'])
-            ? (float) $quote['price']
-            : null;
+        $quote = $this->rateProvider->getRateQuote($quoteRequest);
+
+        $rawRate = $quote !== null ? $quote->getPrice() : null;
 
         if ($rawRate === null) {
             $rawRate = $this->getFallbackRate($methodConfig);
@@ -185,7 +189,8 @@ final class ShippingMethodRegistry
             return null;
         }
 
-        $calculated = $this->rateCalculator->calculate($rawRate, $this->settings->getPricingModifiers());
+        $calculated = $this->rateCalculator->calculate($rawRate, $this->settings->getPricingModifiers(), $quoteRequest);
+        $calculated = (float) apply_filters('lp_cargonizer_rate_post_processing', $calculated, $rawRate, $methodConfig, $package, $quoteRequest, $quote);
         $validated = $this->validateRate($calculated);
 
         if ($validated === null) {
