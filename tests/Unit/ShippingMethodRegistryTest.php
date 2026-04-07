@@ -104,4 +104,94 @@ XML;
         self::assertTrue($methods[1]['is_manual']);
         self::assertSame('Posten - Manuell - Norgespakke', $methods[1]['title']);
     }
+
+    public function testResolveAdminEstimateCalculatesManualNorgespakkeAndManualHandlingDebug(): void
+    {
+        $settings = $this->createMock(SettingsService::class);
+        $settings->method('getSettings')->willReturn([
+            'method_pricing' => [
+                'lp_cargonizer_manualnorgespakke' => [
+                    'price_source' => 'manual_norgespakke',
+                    'vat_percent' => 25,
+                    'manual_norgespakke_include_handling' => 1,
+                ],
+            ],
+        ]);
+
+        $client = $this->createMock(CargonizerClient::class);
+        $client->expects(self::never())->method('estimateConsignmentCost');
+        $calculator = $this->createMock(RateCalculator::class);
+        $registry = new ShippingMethodRegistry($settings, $client, $client, $calculator);
+
+        $result = $registry->resolveAdminEstimate(
+            [
+                'method_id' => 'lp_cargonizer_manualnorgespakke',
+                'key' => 'manual|norgespakke',
+                'carrier_name' => 'Posten',
+                'title' => 'Posten - Manuell - Norgespakke',
+            ],
+            [
+                'colli' => [
+                    ['weight' => 8, 'length' => 100, 'width' => 40, 'height' => 30],
+                    ['weight' => 24, 'length' => 121, 'width' => 20, 'height' => 20],
+                    ['weight' => 35, 'length' => 70, 'width' => 70, 'height' => 20],
+                ],
+            ],
+            []
+        );
+
+        self::assertSame(1211.5, $result['rate']);
+        self::assertSame(641.2, $result['estimate_debug']['manual_norgespakke']['base_price_ex_vat']);
+        self::assertSame(2, $result['estimate_debug']['manual_norgespakke']['handling_package_count']);
+        self::assertSame(328.0, $result['estimate_debug']['manual_norgespakke']['handling_fee_ex_vat']);
+        self::assertSame('any_side_over_120cm', $result['estimate_debug']['manual_norgespakke']['package_debug'][1]['manual_handling_reason']);
+        self::assertSame('at_least_two_sides_over_60cm', $result['estimate_debug']['manual_norgespakke']['package_debug'][2]['manual_handling_reason']);
+        self::assertSame(969.2, $result['estimate_debug']['calculation']['list_price_including_fees']);
+        self::assertSame(242.3, $result['estimate_debug']['calculation']['vat_amount']);
+        self::assertSame(969.2, $result['estimate_debug']['calculation']['final_ex_vat_price']);
+    }
+
+    public function testResolveAdminEstimateAddsManualHandlingFeeForBringMethods(): void
+    {
+        $settings = $this->createMock(SettingsService::class);
+        $settings->method('getSettings')->willReturn([
+            'method_pricing' => [
+                'lp_cargonizer_bringtest' => [
+                    'price_source' => 'estimated',
+                    'vat_percent' => 25,
+                    'handling_fee' => 10,
+                ],
+            ],
+        ]);
+
+        $client = $this->createMock(CargonizerClient::class);
+        $client->method('estimateConsignmentCost')->willReturn([
+            'prices' => [
+                'estimated_cost' => 100,
+            ],
+            'requirements' => [],
+            'errors' => [],
+        ]);
+        $calculator = $this->createMock(RateCalculator::class);
+        $registry = new ShippingMethodRegistry($settings, $client, $client, $calculator);
+
+        $result = $registry->resolveAdminEstimate(
+            [
+                'method_id' => 'lp_cargonizer_bringtest',
+                'carrier_name' => 'Bring',
+                'title' => 'Bring test',
+            ],
+            [
+                'colli' => [
+                    ['weight' => 5, 'length' => 130, 'width' => 20, 'height' => 10],
+                ],
+            ],
+            []
+        );
+
+        self::assertSame(330.0, $result['rate']);
+        self::assertSame(10.0, $result['estimate_debug']['calculation']['handling_fee']);
+        self::assertSame(164.0, $result['estimate_debug']['calculation']['manual_handling_fee']);
+        self::assertSame(1, $result['estimate_debug']['calculation']['manual_handling_package_count']);
+    }
 }

@@ -245,24 +245,33 @@ final class ShippingMethodRegistry
             }
         }
 
-        $result = $this->client->estimateConsignmentCost(
-            $recipient,
-            $this->extractPackagesFromPackageInput($package),
-            $methodConfig,
-            [
-                'service_partner' => sanitize_text_field((string) ($methodConfig['service_partner'] ?? '')),
-                'services' => $services,
-                'sms_service_id' => isset($services[0]['id']) ? (string) $services[0]['id'] : '',
-                'custom_params' => $customParams,
+        $packages = $this->extractPackagesFromPackageInput($package);
+        $isManualNorgespakkeMethod = sanitize_key((string) ($methodConfig['key'] ?? '')) === 'manualnorgespakke';
+        $result = $isManualNorgespakkeMethod
+            ? [
+                'prices' => [],
+                'requirements' => [],
+                'errors' => [],
             ]
-        );
+            : $this->client->estimateConsignmentCost(
+                $recipient,
+                $packages,
+                $methodConfig,
+                [
+                    'service_partner' => sanitize_text_field((string) ($methodConfig['service_partner'] ?? '')),
+                    'services' => $services,
+                    'sms_service_id' => isset($services[0]['id']) ? (string) $services[0]['id'] : '',
+                    'custom_params' => $customParams,
+                ]
+            );
 
         $methodPricing = $this->getMethodPricingConfig($methodConfig);
         $prices = is_array($result['prices'] ?? null) ? $result['prices'] : [];
-        $priceFields = $this->parseEstimatePriceFields($prices, $fallbackRate);
+        $manualPricing = $this->buildManualNorgespakkePricing($packages);
+        $priceFields = $this->parseEstimatePriceFields($prices, $fallbackRate, $manualPricing['base_price_ex_vat']);
         $sourcePriority = $this->getPriceSourcePriority((string) ($methodPricing['price_source'] ?? 'estimated'));
         $selectedSource = $this->selectEstimatePriceValue($priceFields, $sourcePriority);
-        $pricingComputation = $this->calculateEstimateFromPriceSource($selectedSource, $methodPricing);
+        $pricingComputation = $this->calculateEstimateFromPriceSource($selectedSource, $methodPricing, $methodConfig, $manualPricing);
         $computedRate = isset($pricingComputation['rounded_rate']) && is_numeric($pricingComputation['rounded_rate'])
             ? $this->validateRate((float) $pricingComputation['rounded_rate'])
             : null;
@@ -280,6 +289,7 @@ final class ShippingMethodRegistry
                 'price_fields' => $priceFields,
                 'source_priority' => $sourcePriority,
                 'selected_source' => $selectedSource,
+                'manual_norgespakke' => $manualPricing,
                 'calculation' => $pricingComputation,
             ],
             'supports_sms' => $this->resolveSmsServiceId($methodConfig) !== '',
@@ -708,14 +718,14 @@ final class ShippingMethodRegistry
      * @param array<string,mixed> $prices
      * @return array<string,float|null>
      */
-    private function parseEstimatePriceFields(array $prices, ?float $fallbackRate): array
+    private function parseEstimatePriceFields(array $prices, ?float $fallbackRate, ?float $manualNorgespakkePrice): array
     {
         $parsed = [];
         $parsed['estimated'] = isset($prices['estimated_cost']) && is_numeric($prices['estimated_cost']) ? (float) $prices['estimated_cost'] : null;
         $parsed['gross'] = isset($prices['gross_amount']) && is_numeric($prices['gross_amount']) ? (float) $prices['gross_amount'] : null;
         $parsed['net'] = isset($prices['net_amount']) && is_numeric($prices['net_amount']) ? (float) $prices['net_amount'] : null;
         $parsed['fallback'] = $fallbackRate;
-        $parsed['manual_norgespakke'] = $fallbackRate;
+        $parsed['manual_norgespakke'] = $manualNorgespakkePrice;
         $parsed['price'] = isset($prices['price']) && is_numeric($prices['price']) ? (float) $prices['price'] : null;
         $parsed['total'] = isset($prices['total']) && is_numeric($prices['total']) ? (float) $prices['total'] : null;
 
@@ -790,13 +800,22 @@ final class ShippingMethodRegistry
      * @param array<string,mixed> $methodPricing
      * @return array<string,mixed>
      */
-    private function calculateEstimateFromPriceSource(array $selectedSource, array $methodPricing): array
+    private function calculateEstimateFromPriceSource(array $selectedSource, array $methodPricing, array $methodConfig, array $manualPricing): array
     {
         $selectedValue = $selectedSource['value'] ?? null;
         if (!is_numeric($selectedValue)) {
             return [
                 'rounded_rate' => null,
                 'calculation_status' => 'missing_selected_value',
+                'manual_norgespakke' => $manualPricing,
+            ];
+        }
+
+        if (($selectedSource['source'] ?? '') === 'manual_norgespakke' && !empty($manualPricing['rejected'])) {
+            return [
+                'rounded_rate' => null,
+                'calculation_status' => 'manual_norgespakke_rejected',
+                'manual_norgespakke' => $manualPricing,
             ];
         }
 
@@ -804,12 +823,18 @@ final class ShippingMethodRegistry
         $discountPercent = max(0.0, min(100.0, (float) ($methodPricing['discount_percent'] ?? 0)));
         $fuelPercent = max(0.0, min(100.0, (float) ($methodPricing['fuel_percent'] ?? ($methodPricing['fuel_surcharge'] ?? 0))));
         $tollFee = max(0.0, (float) ($methodPricing['toll_fee'] ?? ($methodPricing['toll_surcharge'] ?? 0)));
-        $handlingFee = max(0.0, (float) ($methodPricing['handling_fee'] ?? 0));
+        $configuredHandlingFee = max(0.0, (float) ($methodPricing['handling_fee'] ?? 0));
         $vatPercent = max(0.0, min(100.0, (float) ($methodPricing['vat_percent'] ?? 0)));
+        $manualHandlingFee = max(0.0, (float) ($manualPricing['handling_fee_ex_vat'] ?? 0));
+        $isManualSource = ($selectedSource['source'] ?? '') === 'manual_norgespakke';
+        $isBringMethod = $this->isBringMethod($methodConfig);
 
-        if (($selectedSource['source'] ?? '') === 'manual_norgespakke' && empty($methodPricing['manual_norgespakke_include_handling'])) {
-            $handlingFee = 0.0;
+        $includeManualHandlingForManualSource = $isManualSource && !empty($methodPricing['manual_norgespakke_include_handling']);
+        if ($includeManualHandlingForManualSource) {
+            $listPrice += $manualHandlingFee;
         }
+
+        $handlingFee = $configuredHandlingFee + ($includeManualHandlingForManualSource ? $manualHandlingFee : 0.0);
 
         $fuelMultiplier = 1 + ($fuelPercent / 100);
         $baseFreightBeforeDiscount = max(0.0, ($listPrice - $tollFee - $handlingFee) / $fuelMultiplier);
@@ -817,6 +842,9 @@ final class ShippingMethodRegistry
         $discountedBaseFreight = max(0.0, $baseFreightBeforeDiscount - $discountAmount);
         $fuelAmount = $discountedBaseFreight * ($fuelPercent / 100);
         $subtotalExVat = $discountedBaseFreight + $fuelAmount + $tollFee + $handlingFee;
+        if (!$isManualSource && $isBringMethod) {
+            $subtotalExVat += $manualHandlingFee;
+        }
         $vatAmount = $subtotalExVat * ($vatPercent / 100);
         $totalBeforeRounding = $subtotalExVat + $vatAmount;
 
@@ -833,12 +861,116 @@ final class ShippingMethodRegistry
             'fuel_amount' => $fuelAmount,
             'toll_fee' => $tollFee,
             'handling_fee' => $handlingFee,
+            'manual_handling_fee' => $manualHandlingFee,
+            'manual_handling_package_count' => (int) ($manualPricing['handling_package_count'] ?? 0),
+            'manual_handling_reasons' => is_array($manualPricing['handling_reasons'] ?? null) ? array_values($manualPricing['handling_reasons']) : [],
             'subtotal_ex_vat' => $subtotalExVat,
             'vat_percent' => $vatPercent,
             'vat_amount' => $vatAmount,
             'total_before_rounding' => $totalBeforeRounding,
             'rounding_mode' => (string) ($methodPricing['rounding_mode'] ?? 'none'),
             'rounded_rate' => $roundedRate,
+            'final_ex_vat_price' => $subtotalExVat,
+            'manual_norgespakke' => $manualPricing,
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $methodConfig
+     */
+    private function isBringMethod(array $methodConfig): bool
+    {
+        $carrierName = strtolower((string) ($methodConfig['carrier_name'] ?? ''));
+        $carrierId = strtolower((string) ($methodConfig['carrier_id'] ?? ''));
+        $title = strtolower((string) ($methodConfig['title'] ?? ''));
+
+        return strpos($carrierName, 'bring') !== false
+            || strpos($carrierId, 'bring') !== false
+            || strpos($title, 'bring') !== false;
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $packages
+     * @return array<string,mixed>
+     */
+    private function buildManualNorgespakkePricing(array $packages): array
+    {
+        $packageDebug = [];
+        $baseSubtotalExVat = 0.0;
+        $handlingPackageCount = 0;
+        $rejected = false;
+        $rejectionReason = '';
+        $handlingReasons = [];
+
+        foreach ($packages as $index => $package) {
+            $weight = max(0.0, (float) ($package['weight'] ?? 0));
+            $length = max(0.0, (float) ($package['length'] ?? 0));
+            $width = max(0.0, (float) ($package['width'] ?? 0));
+            $height = max(0.0, (float) ($package['height'] ?? 0));
+
+            $basePrice = null;
+            if ($weight <= 10.0) {
+                $basePrice = 112.00;
+            } elseif ($weight <= 25.0) {
+                $basePrice = 200.80;
+            } elseif ($weight <= 35.0) {
+                $basePrice = 268.00;
+            } else {
+                $rejected = true;
+                $rejectionReason = 'weight_over_35kg';
+            }
+
+            $sides = [$length, $width, $height];
+            $sidesOver60 = count(array_filter($sides, static function (float $side): bool {
+                return $side > 60.0;
+            }));
+            $hasSideOver120 = $length > 120.0 || $width > 120.0 || $height > 120.0;
+            $manualHandlingTriggered = $hasSideOver120 || $sidesOver60 >= 2;
+
+            $manualReasonParts = [];
+            if ($hasSideOver120) {
+                $manualReasonParts[] = 'any_side_over_120cm';
+            }
+            if ($sidesOver60 >= 2) {
+                $manualReasonParts[] = 'at_least_two_sides_over_60cm';
+            }
+            $manualReason = implode('+', $manualReasonParts);
+
+            if ($manualHandlingTriggered) {
+                $handlingPackageCount++;
+                if ($manualReason !== '') {
+                    $handlingReasons[] = $manualReason;
+                }
+            }
+
+            if ($basePrice !== null) {
+                $baseSubtotalExVat += $basePrice;
+            }
+
+            $packageDebug[] = [
+                'index' => $index,
+                'weight_kg' => $weight,
+                'length_cm' => $length,
+                'width_cm' => $width,
+                'height_cm' => $height,
+                'norgespakke_base_price_ex_vat' => $basePrice,
+                'manual_handling_triggered' => $manualHandlingTriggered,
+                'manual_handling_reason' => $manualReason,
+            ];
+        }
+
+        $handlingFeeExVat = $handlingPackageCount * 164.00;
+
+        return [
+            'package_debug' => $packageDebug,
+            'package_count' => count($packageDebug),
+            'base_price_ex_vat' => $rejected ? null : $baseSubtotalExVat,
+            'handling_package_count' => $handlingPackageCount,
+            'handling_reasons' => array_values(array_unique($handlingReasons)),
+            'handling_fee_ex_vat' => $handlingFeeExVat,
+            'rejected' => $rejected,
+            'rejection_reason' => $rejectionReason,
+            'subtotal_ex_vat' => $rejected ? null : $baseSubtotalExVat + $handlingFeeExVat,
         ];
     }
 
