@@ -706,11 +706,11 @@ final class CargonizerClient implements RateProviderInterface
         return [
             'errors' => $errors,
             'prices' => [
-                'estimated_cost' => $this->xmlNodeFloat($document, ['//estimated_cost', '//estimated-cost']),
-                'gross_amount' => $this->xmlNodeFloat($document, ['//gross_amount', '//gross-amount']),
-                'net_amount' => $this->xmlNodeFloat($document, ['//net_amount', '//net-amount']),
+                'estimated_cost' => $this->xmlNodeFloat($document, ['//estimated-cost', '//estimated_cost']),
+                'gross_amount' => $this->xmlNodeFloat($document, ['//gross-amount', '//gross_amount']),
+                'net_amount' => $this->xmlNodeFloat($document, ['//net-amount', '//net_amount']),
                 'price' => $this->xmlNodeFloat($document, ['//price', '//amount']),
-                'total' => $this->xmlNodeFloat($document, ['//total', '//total_amount', '//total-amount']),
+                'total' => $this->xmlNodeFloat($document, ['//total', '//total-amount', '//total_amount']),
             ],
             'requirements' => $requirementFlags,
         ];

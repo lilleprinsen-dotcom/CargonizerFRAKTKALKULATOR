@@ -42,6 +42,24 @@ XML;
         self::assertSame('SMS service required', $parsed['errors'][1]['message']);
     }
 
+    public function testParseConsignmentCostEstimateXmlPrefersDocumentedHyphenatedPriceFields(): void
+    {
+        $xml = <<<'XML'
+<?xml version="1.0" encoding="UTF-8"?>
+<consignment-cost-response>
+  <gross-amount>210.50</gross-amount>
+  <gross_amount>111.11</gross_amount>
+  <net-amount>168.40</net-amount>
+  <net_amount>99.99</net_amount>
+</consignment-cost-response>
+XML;
+
+        $parsed = $this->invokeParser($xml);
+
+        self::assertSame(210.5, $parsed['prices']['gross_amount']);
+        self::assertSame(168.4, $parsed['prices']['net_amount']);
+    }
+
     /**
      * @return array<string,mixed>
      */

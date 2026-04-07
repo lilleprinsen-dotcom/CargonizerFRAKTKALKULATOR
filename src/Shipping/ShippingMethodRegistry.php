@@ -351,7 +351,7 @@ final class ShippingMethodRegistry
             return [];
         }
 
-        $nodes = $document->xpath('//service_partner');
+        $nodes = $this->xmlNodes($document, ['//service-partner', '//service_partner']);
         if (!is_array($nodes)) {
             return [];
         }
@@ -375,12 +375,12 @@ final class ShippingMethodRegistry
      */
     private function normalizeServicepartnerOption(\SimpleXMLElement $node): ?array
     {
-        $id = sanitize_text_field($this->xmlValue($node, ['number', 'id', 'service_partner_id']));
+        $id = sanitize_text_field($this->xmlValue($node, ['identifier', 'number', 'service-partner-id', 'service_partner_id', 'id']));
         if ($id === '') {
             return null;
         }
 
-        $name = sanitize_text_field($this->xmlValue($node, ['name', 'service_partner_name']));
+        $name = sanitize_text_field($this->xmlValue($node, ['name', 'service-partner-name', 'service_partner_name']));
 
         return [
             'id' => $id,
@@ -465,24 +465,24 @@ final class ShippingMethodRegistry
         $methods = [];
         $instance = 1;
 
-        $agreements = $document->xpath('//transport_agreement | //transport-agreement');
+        $agreements = $this->xmlNodes($document, ['//transport-agreement', '//transport_agreement']);
         if (!is_array($agreements)) {
             return [];
         }
 
         foreach ($agreements as $agreement) {
-            $agreementId = $this->xmlValue($agreement, ['agreement_id', 'agreement-id', 'identifier', 'id']);
+            $agreementId = $this->xmlValue($agreement, ['identifier', 'agreement-id', 'agreement_id', 'id']);
             $agreementName = $this->xmlValue($agreement, ['agreement_name', 'agreement-name', 'agreement_description', 'agreement-description', 'description', 'name']);
             $agreementDescription = $this->xmlValue($agreement, ['agreement_description', 'agreement-description', 'description', 'agreement_name', 'agreement-name', 'name']);
             $agreementNumber = $this->xmlValue($agreement, ['agreement_number', 'agreement-number', 'number']);
 
             $carrierId = $this->xmlValue($agreement, [
-                'carrier/carrier_id',
-                'carrier/carrier-id',
                 'carrier/identifier',
+                'carrier/carrier-id',
+                'carrier/carrier_id',
                 'carrier/id',
-                'carrier_id',
                 'carrier-id',
+                'carrier_id',
             ]);
             $carrierName = $this->xmlValue($agreement, [
                 'carrier/carrier_name',
@@ -502,7 +502,7 @@ final class ShippingMethodRegistry
             }
 
             foreach ($products as $product) {
-                $productId = $this->xmlValue($product, ['product_id', 'product-id', 'identifier', 'id']);
+                $productId = $this->xmlValue($product, ['identifier', 'product-id', 'product_id', 'id']);
                 $productName = $this->xmlValue($product, ['product_name', 'product-name', 'name']);
 
                 if ($agreementId === '' || $productId === '') {
@@ -523,7 +523,7 @@ final class ShippingMethodRegistry
                 }
                 if (is_array($serviceNodes)) {
                     foreach ($serviceNodes as $serviceNode) {
-                        $serviceId = $this->xmlValue($serviceNode, ['service_id', 'service-id', 'identifier', 'id']);
+                        $serviceId = $this->xmlValue($serviceNode, ['identifier', 'service-id', 'service_id', 'id']);
                         $serviceName = $this->xmlValue($serviceNode, ['service_name', 'service-name', 'name']);
                         if ($serviceName !== '' || $serviceId !== '') {
                             $services[] = [
@@ -599,6 +599,22 @@ final class ShippingMethodRegistry
         }
 
         return '';
+    }
+
+    /**
+     * @param array<int,string> $paths
+     * @return array<int,\SimpleXMLElement>|null
+     */
+    private function xmlNodes(\SimpleXMLElement $node, array $paths): ?array
+    {
+        foreach ($paths as $path) {
+            $matches = $node->xpath($path);
+            if (is_array($matches) && $matches !== []) {
+                return $matches;
+            }
+        }
+
+        return null;
     }
 
     /**
