@@ -82,6 +82,15 @@ final class AdminOrderController
         echo '<button type="button" class="button button-small" data-action="clear-all-methods">' . esc_html__('Fjern alle', 'lp-cargonizer') . '</button>';
         echo '</div>';
         echo '<div class="lp-cargonizer-method-list"></div>';
+        echo '<div class="lp-cargonizer-booking-servicepartner" style="display:none;">';
+        echo '<h5>' . esc_html__('Utleveringssted / service point', 'lp-cargonizer') . '</h5>';
+        echo '<p class="description">' . esc_html__('Velg hentested for valgt fraktmetode.', 'lp-cargonizer') . '</p>';
+        echo '<div class="lp-cargonizer-booking-servicepartner__controls">';
+        echo '<select data-action="booking-servicepartner-select"><option value="">' . esc_html__('Velg …', 'lp-cargonizer') . '</option></select>';
+        echo '<button type="button" class="button button-small" data-action="refresh-booking-servicepartner">' . esc_html__('Oppdater hentesteder', 'lp-cargonizer') . '</button>';
+        echo '</div>';
+        echo '<p class="description" data-role="booking-servicepartner-message"></p>';
+        echo '</div>';
         echo '</section>';
 
         echo '<section><h4>' . esc_html__('Resultater', 'lp-cargonizer') . '</h4><div class="lp-cargonizer-estimator-results"></div></section>';
@@ -239,6 +248,9 @@ final class AdminOrderController
             .lp-cargonizer-estimator-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
             .lp-cargonizer-method-list { max-height: 180px; overflow: auto; border: 1px solid #ddd; padding: 8px; }
             .lp-cargonizer-method-list label { display: block; margin-bottom: 4px; }
+            .lp-cargonizer-booking-servicepartner { margin-top: 10px; padding: 10px; border: 1px solid #ddd; background: #fafafa; }
+            .lp-cargonizer-booking-servicepartner__controls { display: flex; gap: 8px; align-items: center; }
+            .lp-cargonizer-booking-servicepartner__controls select { min-width: 280px; max-width: 100%; }
             .lp-cargonizer-colli-body input[type="number"], .lp-cargonizer-colli-body input[type="text"] { width: 100%; }
             .lp-cargonizer-colli-controls { display:flex; align-items:center; justify-content: space-between; margin-bottom:8px; }
             .lp-cargonizer-error { color: #b32d2e; }
@@ -249,7 +261,7 @@ final class AdminOrderController
                 const modal = document.getElementById('lp-cargonizer-estimator-modal');
                 if (!modal) return;
 
-                const state = { orderData: null, methods: [], packages: [], selectedMethods: new Set(), lastPayload: null, methodOverrides: {} };
+                const state = { orderData: null, methods: [], packages: [], selectedMethods: new Set(), lastPayload: null, methodOverrides: {}, bookingMode: 'booking' };
                 const endpoints = {
                     orderData: '<?php echo esc_js(admin_url('admin-ajax.php')); ?>?action=lp_cargonizer_get_order_estimate_data',
                     methods: '<?php echo esc_js(admin_url('admin-ajax.php')); ?>?action=lp_cargonizer_get_shipping_options',
@@ -262,6 +274,9 @@ final class AdminOrderController
                 const colliBody = modal.querySelector('.lp-cargonizer-colli-body');
                 const colliValidation = modal.querySelector('[data-role="colli-validation"]');
                 const methodsEl = modal.querySelector('.lp-cargonizer-method-list');
+                const bookingServicepartnerEl = modal.querySelector('.lp-cargonizer-booking-servicepartner');
+                const bookingServicepartnerSelect = modal.querySelector('[data-action="booking-servicepartner-select"]');
+                const bookingServicepartnerMessage = modal.querySelector('[data-role="booking-servicepartner-message"]');
                 const resultsEl = modal.querySelector('.lp-cargonizer-estimator-results');
                 const retryBtn = modal.querySelector('[data-action="retry"]');
 
@@ -318,6 +333,100 @@ final class AdminOrderController
                     state.methods = enabled;
                     if (!state.selectedMethods.size) enabled.forEach((m) => state.selectedMethods.add(m.method_id));
                     methodsEl.innerHTML = enabled.map((m) => `<label><input type="checkbox" data-method="${esc(m.method_id)}" ${state.selectedMethods.has(m.method_id) ? 'checked' : ''}> ${esc(m.title || m.method_id)}</label>`).join('') || '<p>Ingen aktive Cargonizer-metoder funnet.</p>';
+                    updateBookingServicepartnerVisibility();
+                };
+
+                const methodLikelyNeedsServicePoint = (method) => {
+                    if (!method || typeof method !== 'object') return false;
+                    const pricing = method.method_pricing || {};
+                    if (Number(pricing.delivery_to_pickup_point || 0) > 0) return true;
+                    if (Number(pricing.delivery_to_home || 0) > 0) return false;
+
+                    const text = `${method.product_id || ''} ${method.product_name || ''} ${method.title || ''}`.toLowerCase();
+                    return ['pickup', 'service point', 'service-point', 'locker', 'hentested', 'utleveringssted', 'pakkeboks', 'parcel locker', 'pakke til hentested']
+                        .some((needle) => text.includes(needle));
+                };
+
+                const selectedMethodConfigs = () => state.methods.filter((m) => state.selectedMethods.has(m.method_id));
+
+                const setBookingServicepartnerMessage = (text, isError = false) => {
+                    bookingServicepartnerMessage.textContent = text || '';
+                    bookingServicepartnerMessage.classList.toggle('lp-cargonizer-error', !!isError);
+                };
+
+                const fetchServicepartnersForMethod = async (method, showErrors = true) => {
+                    const destination = ((state.orderData || {}).package || {}).destination || {};
+                    const response = await fetchJson(endpoints.servicepartners, {
+                        nonce: modal.dataset.getServicepartnerOptionsNonce,
+                        method_id: method.method_id || '',
+                        agreement_id: method.agreement_id || '',
+                        product_id: method.product_id || '',
+                        carrier_id: method.carrier_id || '',
+                        carrier_name: method.carrier_name || '',
+                        product_name: method.product_name || '',
+                        recipient_country: destination.country || '',
+                        recipient_postcode: destination.postcode || '',
+                        recipient_address1: ((state.orderData || {}).recipient || {}).address || '',
+                        recipient_city: destination.city || '',
+                        destination: JSON.stringify(destination)
+                    });
+                    if (!response.success) {
+                        const backendMessage = (response.data && response.data.message) ? String(response.data.message) : '';
+                        if (showErrors) setBookingServicepartnerMessage(`Kunne ikke hente hentesteder for valgt metode.${backendMessage ? ` ${backendMessage}` : ''}`, true);
+                        return [];
+                    }
+
+                    const opts = (response.data && response.data.servicepartners) || [];
+                    const debug = response.data && response.data.debug ? response.data.debug : {};
+                    const backendMessage = debug && debug.message ? String(debug.message) : '';
+                    if (!Array.isArray(opts) || opts.length === 0) {
+                        if (showErrors) setBookingServicepartnerMessage(`Kunne ikke hente hentesteder for valgt metode.${backendMessage ? ` ${backendMessage}` : ''}`, true);
+                        return [];
+                    }
+
+                    if (backendMessage) setBookingServicepartnerMessage(backendMessage, false);
+                    else setBookingServicepartnerMessage('', false);
+
+                    return opts
+                        .map((sp) => {
+                            const value = String((sp && (sp.id || sp.value)) || '').trim();
+                            if (!value) return null;
+                            const label = String((sp && (sp.name || sp.label || value)) || value).trim() || value;
+                            return { id: value, name: label };
+                        })
+                        .filter(Boolean);
+                };
+
+                const renderBookingServicepartnerOptions = (methodId, options) => {
+                    const methodOverride = state.methodOverrides[methodId] || {};
+                    const selected = String(methodOverride.service_partner || '');
+                    bookingServicepartnerSelect.innerHTML = `<option value="">Velg …</option>${options.map((sp) => `<option value="${esc(sp.id)}" ${selected === String(sp.id) ? 'selected' : ''}>${esc(sp.name)}</option>`).join('')}`;
+                };
+
+                const updateBookingServicepartnerVisibility = async () => {
+                    if (state.bookingMode !== 'booking') {
+                        bookingServicepartnerEl.style.display = 'none';
+                        return;
+                    }
+
+                    const selected = selectedMethodConfigs();
+                    if (selected.length !== 1) {
+                        bookingServicepartnerEl.style.display = 'none';
+                        setBookingServicepartnerMessage('');
+                        return;
+                    }
+
+                    const method = selected[0];
+                    if (!methodLikelyNeedsServicePoint(method)) {
+                        bookingServicepartnerEl.style.display = 'none';
+                        setBookingServicepartnerMessage('');
+                        return;
+                    }
+
+                    bookingServicepartnerEl.style.display = '';
+                    bookingServicepartnerSelect.dataset.methodId = method.method_id || '';
+                    const options = await fetchServicepartnersForMethod(method, true);
+                    renderBookingServicepartnerOptions(method.method_id || '', options);
                 };
 
                 const buildDefaultPackages = (lines, packages) => {
@@ -377,13 +486,20 @@ final class AdminOrderController
                         resultsEl.innerHTML = '<p class="lp-cargonizer-error">Velg minst én fraktmetode.</p>';
                         return;
                     }
+                    const bookingServicepartner = String(bookingServicepartnerSelect.value || '').trim();
+                    if (methodIds.length === 1 && bookingServicepartner !== '') {
+                        const selectedMethodId = methodIds[0];
+                        if (!state.methodOverrides[selectedMethodId]) state.methodOverrides[selectedMethodId] = {};
+                        state.methodOverrides[selectedMethodId].service_partner = bookingServicepartner;
+                    }
 
                     const payload = {
                         nonce: modal.dataset.runBulkEstimateNonce,
                         order_id: modal.dataset.orderId,
                         method_ids: JSON.stringify(methodIds),
                         packages: JSON.stringify(state.packages),
-                        method_overrides: JSON.stringify(state.methodOverrides)
+                        method_overrides: JSON.stringify(state.methodOverrides),
+                        'methods[0][servicepartner]': bookingServicepartner
                     };
                     state.lastPayload = payload;
 
@@ -527,6 +643,16 @@ final class AdminOrderController
                     if (action === 'run-estimate') runEstimate();
                     if (action === 'retry' && state.lastPayload) runEstimate();
                     if (action === 'retry-one') retrySingleMethod(actionTarget.dataset.methodId || '');
+                    if (action === 'refresh-booking-servicepartner') {
+                        const selected = selectedMethodConfigs();
+                        if (selected.length === 1) {
+                            fetchServicepartnersForMethod(selected[0], true).then((options) => {
+                                renderBookingServicepartnerOptions(selected[0].method_id || '', options);
+                            }).catch(() => {
+                                setBookingServicepartnerMessage('Kunne ikke hente hentesteder for valgt metode.', true);
+                            });
+                        }
+                    }
                 });
 
                 colliBody.addEventListener('input', (event) => {
@@ -548,6 +674,7 @@ final class AdminOrderController
                     if (!input || !input.dataset || !input.dataset.method) return;
                     if (input.checked) state.selectedMethods.add(input.dataset.method);
                     else state.selectedMethods.delete(input.dataset.method);
+                    updateBookingServicepartnerVisibility();
                 });
 
                 resultsEl.addEventListener('change', async (event) => {
@@ -572,14 +699,24 @@ final class AdminOrderController
                     if (!target || !target.dataset || target.dataset.action !== 'set-servicepartner') return;
                     if (target.dataset.loaded === '1') return;
                     const methodId = target.dataset.methodId || '';
+                    const method = state.methods.find((item) => String(item.method_id || '') === String(methodId)) || {};
                     const destination = ((state.orderData || {}).package || {}).destination || {};
                     try {
                         const response = await fetchJson(endpoints.servicepartners, {
                             nonce: modal.dataset.getServicepartnerOptionsNonce,
                             method_id: methodId,
+                            agreement_id: method.agreement_id || '',
+                            product_id: method.product_id || '',
+                            carrier_id: method.carrier_id || '',
+                            carrier_name: method.carrier_name || '',
+                            product_name: method.product_name || '',
+                            recipient_country: destination.country || '',
+                            recipient_postcode: destination.postcode || '',
+                            recipient_address1: ((state.orderData || {}).recipient || {}).address || '',
+                            recipient_city: destination.city || '',
                             destination: JSON.stringify(destination)
                         });
-                        if (!response.success) return;
+                        if (!response.success) throw new Error((response.data && response.data.message) ? response.data.message : '');
                         const opts = (response.data && response.data.servicepartners) || [];
                         if (!Array.isArray(opts)) return;
                         const normalized = opts
@@ -590,11 +727,23 @@ final class AdminOrderController
                                 return { id: value, name: label };
                             })
                             .filter(Boolean);
+                        if (!normalized.length) {
+                            const debug = response.data && response.data.debug ? response.data.debug : {};
+                            const debugMessage = debug && debug.message ? ` ${String(debug.message)}` : '';
+                            setBookingServicepartnerMessage(`Kunne ikke hente hentesteder for valgt metode.${debugMessage}`, true);
+                        }
                         target.innerHTML = `<option value="">Velg …</option>${normalized.map((sp) => `<option value="${esc(sp.id)}">${esc(sp.name)}</option>`).join('')}`;
                         target.dataset.loaded = '1';
                     } catch (e) {
-                        // no-op
+                        setBookingServicepartnerMessage(`Kunne ikke hente hentesteder for valgt metode.${e && e.message ? ` ${e.message}` : ''}`, true);
                     }
+                });
+
+                bookingServicepartnerSelect.addEventListener('change', () => {
+                    const methodId = bookingServicepartnerSelect.dataset.methodId || '';
+                    if (!methodId) return;
+                    if (!state.methodOverrides[methodId]) state.methodOverrides[methodId] = {};
+                    state.methodOverrides[methodId].service_partner = bookingServicepartnerSelect.value || '';
                 });
             })();
         </script>

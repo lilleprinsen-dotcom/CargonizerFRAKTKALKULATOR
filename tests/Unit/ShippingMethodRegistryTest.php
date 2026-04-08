@@ -242,6 +242,91 @@ XML;
         self::assertSame('Partner A', $options[0]['name']);
     }
 
+    public function testGetServicepartnerOptionsUsesBringMannedPickupPointTypeForPickupProducts(): void
+    {
+        $xml = <<<'XML'
+<?xml version="1.0" encoding="UTF-8"?>
+<service-partners>
+  <service-partner>
+    <identifier>SP-1</identifier>
+    <name>Partner A</name>
+  </service-partner>
+</service-partners>
+XML;
+
+        $settings = $this->createMock(SettingsService::class);
+        $settings->method('getSettings')->willReturn([]);
+
+        $client = $this->createMock(CargonizerClient::class);
+        $client->expects(self::once())
+            ->method('fetchServicePartners')
+            ->with(self::callback(static function (array $query): bool {
+                return ($query['carrier'] ?? '') === '301'
+                    && ($query['custom[params][pickupPointType]'] ?? '') === 'manned';
+            }))
+            ->willReturn(['raw' => $xml]);
+        $calculator = $this->createMock(RateCalculator::class);
+        $registry = new ShippingMethodRegistry($settings, $client, $client, $calculator);
+
+        $registry->getServicepartnerOptions(
+            ['carrier_id' => '301', 'carrier_name' => 'Bring2', 'product_id' => 'PUP', 'product_name' => 'Pakke til hentested'],
+            ['country' => 'NO', 'postcode' => '0150']
+        );
+    }
+
+    public function testGetServicepartnerOptionsUsesPostnordLockerTypeIdForLockerProducts(): void
+    {
+        $xml = <<<'XML'
+<?xml version="1.0" encoding="UTF-8"?>
+<service-partners />
+XML;
+
+        $settings = $this->createMock(SettingsService::class);
+        $settings->method('getSettings')->willReturn([]);
+
+        $client = $this->createMock(CargonizerClient::class);
+        $client->expects(self::once())
+            ->method('fetchServicePartners')
+            ->with(self::callback(static function (array $query): bool {
+                return ($query['carrier'] ?? '') === '302'
+                    && ($query['custom[params][typeId]'] ?? '') === '2';
+            }))
+            ->willReturn(['raw' => $xml]);
+        $calculator = $this->createMock(RateCalculator::class);
+        $registry = new ShippingMethodRegistry($settings, $client, $client, $calculator);
+
+        $registry->getServicepartnerOptions(
+            ['carrier_id' => '302', 'carrier_name' => 'tollpost_globe', 'product_id' => 'myPack small', 'product_name' => 'MyPack Small locker'],
+            ['country' => 'NO', 'postcode' => '0150']
+        );
+    }
+
+    public function testGetServicepartnerOptionsOmitsPostnordTypeIdForGenericServicePointProducts(): void
+    {
+        $xml = <<<'XML'
+<?xml version="1.0" encoding="UTF-8"?>
+<service-partners />
+XML;
+
+        $settings = $this->createMock(SettingsService::class);
+        $settings->method('getSettings')->willReturn([]);
+
+        $client = $this->createMock(CargonizerClient::class);
+        $client->expects(self::once())
+            ->method('fetchServicePartners')
+            ->with(self::callback(static function (array $query): bool {
+                return !isset($query['custom[params][typeId]']);
+            }))
+            ->willReturn(['raw' => $xml]);
+        $calculator = $this->createMock(RateCalculator::class);
+        $registry = new ShippingMethodRegistry($settings, $client, $client, $calculator);
+
+        $registry->getServicepartnerOptions(
+            ['carrier_id' => '302', 'carrier_name' => 'PostNord', 'product_id' => 'pickup', 'product_name' => 'Service Point'],
+            ['country' => 'NO', 'postcode' => '0150']
+        );
+    }
+
     public function testResolveAdminEstimateCalculatesManualNorgespakkeAndManualHandlingDebug(): void
     {
         $settings = $this->createMock(SettingsService::class);

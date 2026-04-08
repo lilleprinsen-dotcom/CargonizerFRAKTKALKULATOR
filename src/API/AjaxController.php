@@ -217,6 +217,7 @@ final class AjaxController
         $preparedMethods = [];
         $methodOverrides = isset($_REQUEST['method_overrides']) ? json_decode(wp_unslash((string) $_REQUEST['method_overrides']), true) : []; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
         $methodOverrides = is_array($methodOverrides) ? $methodOverrides : [];
+        $bookingModeServicepartner = sanitize_text_field((string) ($_REQUEST['methods'][0]['servicepartner'] ?? '')); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
         foreach ($methods as $method) {
             if (!is_array($method)) {
                 continue;
@@ -228,6 +229,8 @@ final class AjaxController
             if ($override !== []) {
                 $method['service_partner'] = sanitize_text_field((string) ($override['service_partner'] ?? ''));
                 $method['sms_enabled'] = !empty($override['sms_enabled']) ? 'yes' : 'no';
+            } elseif (count($methods) === 1 && $bookingModeServicepartner !== '') {
+                $method['service_partner'] = $bookingModeServicepartner;
             }
 
             $preparedMethods[] = $method;
@@ -274,7 +277,35 @@ final class AjaxController
         $method = $this->shippingRegistry->getMethodConfigByMethodId($methodId);
         $destination = isset($_REQUEST['destination']) ? json_decode(wp_unslash((string) $_REQUEST['destination']), true) : []; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
         $destination = is_array($destination) ? $destination : [];
+        $destination['country'] = sanitize_text_field((string) ($_REQUEST['recipient_country'] ?? $destination['country'] ?? '')); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+        $destination['postcode'] = sanitize_text_field((string) ($_REQUEST['recipient_postcode'] ?? $destination['postcode'] ?? '')); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+        $destination['address1'] = sanitize_text_field((string) ($_REQUEST['recipient_address1'] ?? $destination['address1'] ?? $destination['address'] ?? '')); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+        $destination['city'] = sanitize_text_field((string) ($_REQUEST['recipient_city'] ?? $destination['city'] ?? '')); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+
+        $requestProductId = sanitize_text_field((string) ($_REQUEST['product_id'] ?? '')); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+        $requestCarrierId = sanitize_text_field((string) ($_REQUEST['carrier_id'] ?? '')); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+        $requestAgreementId = sanitize_text_field((string) ($_REQUEST['agreement_id'] ?? '')); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+        $requestCarrierName = sanitize_text_field((string) ($_REQUEST['carrier_name'] ?? '')); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+        $requestProductName = sanitize_text_field((string) ($_REQUEST['product_name'] ?? '')); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+
+        if ($requestProductId !== '') {
+            $method['product_id'] = $requestProductId;
+        }
+        if ($requestCarrierId !== '') {
+            $method['carrier_id'] = $requestCarrierId;
+        }
+        if ($requestAgreementId !== '') {
+            $method['agreement_id'] = $requestAgreementId;
+        }
+        if ($requestCarrierName !== '') {
+            $method['carrier_name'] = $requestCarrierName;
+        }
+        if ($requestProductName !== '') {
+            $method['product_name'] = $requestProductName;
+        }
+
         $partners = $this->shippingRegistry->getServicepartnerOptions($method, $destination);
+        $registryDebug = $this->shippingRegistry->getLastServicepartnerDebug();
 
         wp_send_json_success([
             'servicepartners' => $partners,
@@ -282,6 +313,8 @@ final class AjaxController
                 'method_id' => $methodId,
                 'destination' => $destination,
                 'count' => count($partners),
+                'message' => isset($registryDebug['message']) ? (string) $registryDebug['message'] : '',
+                'lookup' => $registryDebug,
             ],
         ]);
     }
