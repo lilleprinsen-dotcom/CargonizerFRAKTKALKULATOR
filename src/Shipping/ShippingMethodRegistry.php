@@ -17,6 +17,8 @@ final class ShippingMethodRegistry
     private CargonizerClient $client;
     private RateProviderInterface $rateProvider;
     private RateCalculator $rateCalculator;
+    /** @var array<string,mixed> */
+    private array $lastServicepartnerDebug = [];
 
     /** @var array<string,float|null> */
     private array $requestRateMemo = [];
@@ -317,42 +319,80 @@ final class ShippingMethodRegistry
         $postcode = sanitize_text_field((string) ($destination['postcode'] ?? ''));
         $productId = sanitize_text_field((string) ($methodConfig['product_id'] ?? ''));
         $agreementId = sanitize_text_field((string) ($methodConfig['agreement_id'] ?? ''));
-        if ($carrierId === '' || $country === '' || $postcode === '') {
+        $carrierName = sanitize_text_field((string) ($methodConfig['carrier_name'] ?? ''));
+        $productName = sanitize_text_field((string) ($methodConfig['product_name'] ?? ''));
+        if (($carrierId === '' && $agreementId === '') || $country === '' || $postcode === '') {
+            $this->lastServicepartnerDebug = [
+                'method_id' => sanitize_text_field((string) ($methodConfig['method_id'] ?? '')),
+                'carrier_id' => $carrierId,
+                'carrier_name' => $carrierName,
+                'product_id' => $productId,
+                'product_name' => $productName,
+                'agreement_id' => $agreementId,
+                'country' => $country,
+                'postcode' => $postcode,
+                'message' => 'Missing required service partner lookup data.',
+            ];
             return [];
         }
 
         $query = [
-            'carrier' => $carrierId,
             'country' => $country,
             'postcode' => $postcode,
         ];
+        if ($carrierId !== '') {
+            $query['carrier'] = $carrierId;
+        }
         if ($productId !== '') {
             $query['product'] = $productId;
         }
         if ($agreementId !== '') {
             $query['transport_agreement_id'] = $agreementId;
         }
+        $address1 = sanitize_text_field((string) ($destination['address1'] ?? $destination['address'] ?? ''));
+        $city = sanitize_text_field((string) ($destination['city'] ?? ''));
+        if ($address1 !== '') {
+            $query['address'] = $address1;
+        }
+        if ($city !== '') {
+            $query['city'] = $city;
+        }
 
-        foreach ($this->resolveCarrierSpecificCustomParams($methodConfig) as $key => $value) {
+        $customParamDetection = $this->detect_servicepartner_custom_params($methodConfig);
+        $customParams = isset($customParamDetection['params']) && is_array($customParamDetection['params']) ? $customParamDetection['params'] : [];
+        foreach ($customParams as $key => $value) {
             if ($value === '') {
                 continue;
             }
 
-            $query[(string) $key] = (string) $value;
+            $query['custom[params][' . (string) $key . ']'] = (string) $value;
         }
+        $this->lastServicepartnerDebug = [
+            'method_id' => sanitize_text_field((string) ($methodConfig['method_id'] ?? '')),
+            'carrier_id' => $carrierId,
+            'carrier_name' => $carrierName,
+            'product_id' => $productId,
+            'product_name' => $productName,
+            'agreement_id' => $agreementId,
+            'query' => $query,
+            'custom_params' => $customParamDetection,
+        ];
 
         $payload = $this->client->fetchServicePartners($query);
         if (!is_string($payload['raw'] ?? null) || !function_exists('simplexml_load_string')) {
+            $this->lastServicepartnerDebug['message'] = 'Service partner API response did not include parseable XML.';
             return [];
         }
 
         $document = @simplexml_load_string((string) $payload['raw']);
         if ($document === false) {
+            $this->lastServicepartnerDebug['message'] = 'Failed to parse service partner XML.';
             return [];
         }
 
         $nodes = $this->xmlNodes($document, ['//service-partner', '//service_partner']);
         if (!is_array($nodes)) {
+            $this->lastServicepartnerDebug['message'] = 'Service partner XML did not contain expected nodes.';
             return [];
         }
 
@@ -367,7 +407,13 @@ final class ShippingMethodRegistry
             }
         }
 
-        return array_values($options);
+        $normalized = array_values($options);
+        $this->lastServicepartnerDebug['count'] = count($normalized);
+        if (count($normalized) === 0) {
+            $this->lastServicepartnerDebug['message'] = 'Service partner request completed, but no options were returned.';
+        }
+
+        return $normalized;
     }
 
     /**
@@ -390,22 +436,62 @@ final class ShippingMethodRegistry
 
     /**
      * @param array<string,mixed> $methodConfig
-     * @return array<string,string>
+     * @return array<string,mixed>
      */
-    private function resolveCarrierSpecificCustomParams(array $methodConfig): array
+    private function detect_servicepartner_custom_params(array $methodConfig): array
     {
-        $carrier = strtolower((string) ($methodConfig['carrier_name'] ?? ''));
-        $productNeedLocker = $this->productIndicatesLocker($methodConfig);
-
-        if (strpos($carrier, 'bring') !== false) {
-            return ['pickupPointType' => $productNeedLocker ? 'locker' : 'pickup_point'];
+        $carrierHaystack = strtolower(trim((string) (($methodConfig['carrier_id'] ?? '') . ' ' . ($methodConfig['carrier_name'] ?? ''))));
+        $carrierFamily = 'other';
+        if (strpos($carrierHaystack, 'bring') !== false || strpos($carrierHaystack, 'bring2') !== false) {
+            $carrierFamily = 'bring';
+        } elseif (strpos($carrierHaystack, 'postnord') !== false || strpos($carrierHaystack, 'tollpost_globe') !== false) {
+            $carrierFamily = 'postnord';
         }
 
-        if (strpos($carrier, 'postnord') !== false) {
-            return ['typeId' => $productNeedLocker ? 'service_point' : 'pickup'];
+        $isLockerProduct = $this->productIndicatesLocker($methodConfig);
+        $isPickupPointProduct = $this->productIndicatesPickupPoint($methodConfig);
+        $params = [];
+        $debug = [
+            'carrier_family' => $carrierFamily,
+            'selected_param_name' => '',
+            'selected_param_value' => '',
+            'why' => '',
+            'omitted' => true,
+        ];
+
+        if ($carrierFamily === 'bring') {
+            if ($isLockerProduct) {
+                $params['pickupPointType'] = 'locker';
+                $debug['selected_param_name'] = 'pickupPointType';
+                $debug['selected_param_value'] = 'locker';
+                $debug['why'] = 'Bring locker-style product detected from product id/name keywords.';
+                $debug['omitted'] = false;
+            } elseif ($isPickupPointProduct) {
+                $params['pickupPointType'] = 'manned';
+                $debug['selected_param_name'] = 'pickupPointType';
+                $debug['selected_param_value'] = 'manned';
+                $debug['why'] = 'Bring pickup/service-point style product detected without locker-specific keywords.';
+                $debug['omitted'] = false;
+            } else {
+                $debug['why'] = 'Bring product does not clearly indicate pickup/service-point behavior, parameter omitted.';
+            }
+        } elseif ($carrierFamily === 'postnord') {
+            if ($isLockerProduct) {
+                $params['typeId'] = '2';
+                $debug['selected_param_name'] = 'typeId';
+                $debug['selected_param_value'] = '2';
+                $debug['why'] = 'PostNord locker-style product detected from product id/name keywords.';
+                $debug['omitted'] = false;
+            } elseif ($isPickupPointProduct) {
+                $debug['why'] = 'PostNord generic pickup/service-point product detected; typeId intentionally omitted due no safe numeric mapping.';
+            } else {
+                $debug['why'] = 'PostNord product does not clearly indicate pickup/service-point behavior, parameter omitted.';
+            }
+        } else {
+            $debug['why'] = 'Carrier family has no documented custom service partner mapping.';
         }
 
-        return [];
+        return ['params' => $params, 'debug' => $debug];
     }
 
     /**
@@ -419,8 +505,41 @@ final class ShippingMethodRegistry
         }
 
         return strpos($productHaystack, 'locker') !== false
+            || strpos($productHaystack, 'parcel locker') !== false
+            || strpos($productHaystack, 'pakkeboks') !== false
+            || strpos($productHaystack, 'mypack small') !== false
+            || strpos($productHaystack, 'box') !== false
             || strpos($productHaystack, 'pakkeautomat') !== false
             || strpos($productHaystack, 'parcel box') !== false;
+    }
+
+    /**
+     * @param array<string,mixed> $methodConfig
+     */
+    private function productIndicatesPickupPoint(array $methodConfig): bool
+    {
+        $productHaystack = strtolower(trim((string) (($methodConfig['product_id'] ?? '') . ' ' . ($methodConfig['product_name'] ?? ''))));
+        if ($productHaystack === '') {
+            return false;
+        }
+
+        return strpos($productHaystack, 'pickup') !== false
+            || strpos($productHaystack, 'service point') !== false
+            || strpos($productHaystack, 'service-point') !== false
+            || strpos($productHaystack, 'pickup point') !== false
+            || strpos($productHaystack, 'pickup-point') !== false
+            || strpos($productHaystack, 'hentested') !== false
+            || strpos($productHaystack, 'utleveringssted') !== false
+            || strpos($productHaystack, 'pakkeshop') !== false
+            || strpos($productHaystack, 'pakke til hentested') !== false;
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    public function getLastServicepartnerDebug(): array
+    {
+        return $this->lastServicepartnerDebug;
     }
 
     /**
